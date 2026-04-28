@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="PaseoCan"/>
+  <meta name="theme-color" content="#0f1a14"/>
+  <title>PaseoCan 🐾</title>
+
+  <!-- PWA Manifest inline -->
+  <link rel="manifest" href="data:application/json,%7B%22name%22%3A%22PaseoCan%22%2C%22short_name%22%3A%22PaseoCan%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230f1a14%22%2C%22theme_color%22%3A%22%230f1a14%22%2C%22icons%22%3A%5B%7B%22src%22%3A%22data%3Aimage%2Fsvg%2Bxml%2C%253Csvg%2520xmlns%3D%2527http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%2527%2520viewBox%3D%270%200%20100%20100%2527%253E%253Ctext%2520y%3D%2527.9em%2527%2520font-size%3D%252790%2527%253E%25F0%259F%2590%25BE%253C%2Ftext%253E%253C%2Fsvg%253E%22%2C%22sizes%22%3A%22any%22%2C%22type%22%3A%22image%2Fsvg%2Bxml%22%7D%5D%7D"/>
+
+  <style>
+    *{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+    html,body{ height:100%; background:#0f1a14; overflow-x:hidden; }
+    #root{ min-height:100vh; }
+    input,select,button{ font-family:inherit; }
+    input[type=number]::-webkit-inner-spin-button{ -webkit-appearance:none; }
+    ::-webkit-scrollbar{ width:4px; }
+    ::-webkit-scrollbar-track{ background:#1a2820; }
+    ::-webkit-scrollbar-thumb{ background:#2d4a36; border-radius:4px; }
+    /* Safe area para iPhone con notch */
+    .safe-top{ padding-top: env(safe-area-inset-top, 0px); }
+    .safe-bottom{ padding-bottom: env(safe-area-inset-bottom, 0px); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React 18 via CDN -->
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <!-- Babel standalone para JSX -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+  <script type="text/babel" data-type="module">
+const { useState, useMemo, useCallback, useEffect } = React;
+
+// ── Constantes ────────────────────────────────────────────────────────────────
+const DAYS_ES   = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const MONTHS_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const getToday  = () => new Date().toISOString().slice(0,10);
+
+const pad2 = n => String(n).padStart(2,"0");
+const ds   = (y,m,d) => `${y}-${pad2(m+1)}-${pad2(d)}`;
+const ars  = n => `$${Number(n||0).toLocaleString("es-AR")}`;
+const wa   = (p,m) => `https://wa.me/${p.replace(/\D/g,"")}?text=${encodeURIComponent(m)}`;
+const gMaps= a => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a)}`;
+const gDir = stops => `https://www.google.com/maps/dir/${stops.filter(Boolean).map(encodeURIComponent).join("/")}/data=!4m2!4m1!3e2`;
+const g2   = (a,b) => `https://www.google.com/maps/dir/${encodeURIComponent(a)}/${encodeURIComponent(b)}/data=!4m2!4m1!3e2`;
+const addMin=(t,m)=>{ const [h,mm]=t.split(":").map(Number),tot=h*60+mm+m; return `${pad2(Math.floor(tot/60)%24)}:${pad2(tot%60)}`; };
+
+function weekRange(dateStr) {
+  const d=new Date(dateStr+"T12:00:00"), dow=d.getDay();
+  const mon=new Date(d); mon.setDate(d.getDate()-(dow===0?6:dow-1));
+  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+  const fmt=x=>`${x.getFullYear()}-${pad2(x.getMonth()+1)}-${pad2(x.getDate())}`;
+  return {from:fmt(mon),to:fmt(sun)};
+}
+function addWeeks(ds,n){ const d=new Date(ds+"T12:00:00"); d.setDate(d.getDate()+n*7); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+function addMonths(ms,n){ const [y,m]=ms.split("-").map(Number); const d=new Date(y,m-1+n,1); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}`; }
+
+// ── Precios ───────────────────────────────────────────────────────────────────
+const DEFAULT_PRICES=[13000,20000,27000,32000,35000];
+const priceFor    =(freq,tbl)=>(tbl||DEFAULT_PRICES)[Math.min(Math.max(freq,1),5)-1];
+const unitPriceFor=(freq,tbl)=>Math.round(priceFor(freq,tbl)/Math.max(freq,1));
+
+function calcCobroUnitario(ps,dog){
+  const r=ps.filter(p=>p.status==="completado").length;
+  const cc=ps.filter(p=>p.status==="cancelado"&&p.cancelBy==="client").length;
+  const cy=ps.filter(p=>p.status==="cancelado"&&p.cancelBy==="me").length;
+  return {modo:"unitario",realizados:r,cxlCliente:cc,cxlYo:cy,precio:dog.unitPrice,cobro:r*dog.unitPrice};
+}
+function calcCobroPaquete(ps,dog){
+  const r=ps.filter(p=>p.status==="completado").length;
+  const cc=ps.filter(p=>p.status==="cancelado"&&p.cancelBy==="client").length;
+  const cy=ps.filter(p=>p.status==="cancelado"&&p.cancelBy==="me").length;
+  const pc=(dog.schedule||[]).length, pr=Math.max(pc-cc,0);
+  if(!pr) return {modo:"paquete",realizados:r,cxlCliente:cc,cxlYo:cy,packContratado:pc,packResultante:0,semanaContratada:priceFor(pc,dog.prices),semanaResultante:0,precioUnitCont:unitPriceFor(pc,dog.prices),precioReal:0,precioCont:unitPriceFor(pc,dog.prices),descuentoCxlYo:0,cobro:0};
+  const sc=priceFor(pc,dog.prices),sr=priceFor(pr,dog.prices),pu=unitPriceFor(pc,dog.prices),desc=cy*pu,cobro=Math.max(sr-desc,0);
+  return {modo:"paquete",realizados:r,cxlCliente:cc,cxlYo:cy,packContratado:pc,packResultante:pr,semanaContratada:sc,semanaResultante:sr,precioUnitCont:pu,precioReal:pu,precioCont:pu,descuentoCxlYo:desc,cobro};
+}
+function calcCobro(ps,dog){ return dog.unitPrice>0?calcCobroUnitario(ps,dog):calcCobroPaquete(ps,dog); }
+
+function makePaseos(dog,existing){
+  const TODAY=getToday(), seen=new Set(existing.filter(p=>p.dogId===dog.id).map(p=>`${dog.id}-${p.fecha}`));
+  const base=new Date(TODAY+"T12:00:00"), days=dog.schedule.map(Number), price=dog.unitPrice||priceFor(days.length,dog.prices), out=[];
+  let nid=Date.now();
+  for(let i=0;i<49;i++){
+    const d=new Date(base); d.setDate(base.getDate()+i);
+    const dow=d.getDay(); if(!days.includes(dow)) continue;
+    const fecha=ds(d.getFullYear(),d.getMonth(),d.getDate()), key=`${dog.id}-${fecha}`;
+    if(seen.has(key)) continue; seen.add(key);
+    out.push({id:nid++,dogId:dog.id,clientId:dog.clientId,fecha,status:"programado",cancelBy:null,paid:false,paidAmount:0,freq:days.length,price,manual:false});
+  }
+  return out;
+}
+function initPaseos(dogs){
+  const TODAY=getToday(), seen=new Set(), all=[];
+  dogs.forEach(dog=>{
+    const base=new Date(TODAY+"T12:00:00"), days=dog.schedule.map(Number), price=dog.unitPrice||priceFor(days.length,dog.prices);
+    let nid=Date.now()+dog.id*1000;
+    for(let i=0;i<49;i++){
+      const d=new Date(base); d.setDate(base.getDate()+i);
+      const dow=d.getDay(); if(!days.includes(dow)) continue;
+      const fecha=ds(d.getFullYear(),d.getMonth(),d.getDate()), key=`${dog.id}-${fecha}`;
+      if(seen.has(key)) continue; seen.add(key);
+      all.push({id:nid++,dogId:dog.id,clientId:dog.clientId,fecha,status:"programado",cancelBy:null,paid:false,paidAmount:0,freq:days.length,price,manual:false});
+    }
+  });
+  return all;
+}
+
+// ── localStorage ──────────────────────────────────────────────────────────────
+function loadLS(key,fb){
+  try{
+    const r=localStorage.getItem(key);
+    if(r===null||r===undefined||r==="null") return typeof fb==="function"?fb():fb;
+    const parsed=JSON.parse(r);
+    if(parsed===null||parsed===undefined) return typeof fb==="function"?fb():fb;
+    return parsed;
+  }catch{ return typeof fb==="function"?fb():fb; }
+}
+function saveLS(key,val){ try{ localStorage.setItem(key,JSON.stringify(val)); }catch{} }
+function usePersisted(key,fb){
+  const [state,setState]=useState(()=>loadLS(key,fb));
+  const set=useCallback(val=>{ setState(prev=>{ const next=typeof val==="function"?val(prev):val; saveLS(key,next); return next; }); },[key]);
+  return [state,set];
+}
+
+// ── Datos iniciales ───────────────────────────────────────────────────────────
+const INIT_CLIENTS=[
+  {id:101,name:"Natalia",phone:"5491100000001",address:"33 Orientales 822",contacts:[]},
+  {id:102,name:"Athina", phone:"5491100000002",address:"Senillosa 1015",contacts:[]},
+  {id:103,name:"Alicia", phone:"5491100000003",address:"Av. La Plata 826 7A",contacts:[]},
+  {id:104,name:"Jose",   phone:"5491100000004",address:"Muñiz 551 6A",contacts:[]},
+  {id:105,name:"Mari",   phone:"5491100000005",address:"Viel 472 8B",contacts:[]},
+  {id:106,name:"Diego",  phone:"5491100000006",address:"Viel 984 1A",contacts:[]},
+  {id:107,name:"Vale",   phone:"5491100000007",address:"Av. Independencia 4120 11B",contacts:[]},
+  {id:108,name:"Flor",   phone:"5491100000008",address:"Av. Juan B. Alberdi 35 6-17",contacts:[]},
+];
+const INIT_DOGS=[
+  {id:1,clientId:101,name:"Billi",  color:"#f59e0b",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,3,5]},
+  {id:2,clientId:102,name:"Romeo",  color:"#10b981",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
+  {id:3,clientId:103,name:"Bartolo",color:"#8b5cf6",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
+  {id:4,clientId:104,name:"Canela", color:"#f97316",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
+  {id:5,clientId:105,name:"Gucci",  color:"#ec4899",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[2,4]},
+  {id:6,clientId:106,name:"Lara",   color:"#3b82f6",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
+  {id:7,clientId:106,name:"Cody",   color:"#14b8a6",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
+  {id:8,clientId:107,name:"Fidel",  color:"#dc2626",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[3]},
+  {id:9,clientId:108,name:"Ciro",   color:"#7c3aed",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,3,5]},
+];
+const INIT_ROUTES=DAYS_ES.map((label,i)=>({id:i,dow:i,label,startTime:"08:00",origin:"",destination:"",stopOrder:[],legMins:[]}));
+
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const C={
+  bg:"#0f1a14", card:"#1a2820", cardLight:"#223328", border:"#2d4a36",
+  green:"#22c55e", greenDark:"#16a34a", greenSoft:"#166534",
+  amber:"#f59e0b", red:"#ef4444", blue:"#3b82f6", purple:"#a78bfa",
+  text:"#f0fdf4", textMuted:"#86efac", textDim:"#4ade80",
+  wa:"#25D366",
+};
+const INP={padding:"10px 14px",borderRadius:10,border:`1.5px solid ${C.border}`,fontSize:14,background:C.cardLight,color:C.text,width:"100%",boxSizing:"border-box",outline:"none"};
+const LBL={fontSize:12,fontWeight:700,color:C.textMuted,marginBottom:5,display:"block",letterSpacing:"0.05em",textTransform:"uppercase"};
+const BTN=(bg,color,extra={})=>({background:bg,color,border:"none",borderRadius:12,padding:"11px 16px",fontSize:14,fontWeight:700,cursor:"pointer",transition:"opacity .15s",...extra});
+const CARD={background:C.card,borderRadius:16,padding:16,marginBottom:12,border:`1px solid ${C.border}`};
+const SC={programado:{bg:"#1e3a5f",text:"#93c5fd"},completado:{bg:"#14532d",text:"#86efac"},cancelado:{bg:"#450a0a",text:"#fca5a5"}};
+
+// ── Sub-componentes ───────────────────────────────────────────────────────────
+function Tag({children,bg,color}){ return <span style={{background:bg,color,fontSize:11,padding:"2px 8px",borderRadius:20,fontWeight:700,display:"inline-block"}}>{children}</span>; }
+
+function ScheduleEditor({schedule,onChange}){
+  const active=schedule.map(Number);
+  return (
+    <div style={{background:C.cardLight,borderRadius:12,padding:14,border:`1px solid ${C.border}`}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.textMuted,marginBottom:10,letterSpacing:"0.05em"}}>DÍAS DE PASEO</div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {DAYS_ES.map((d,i)=>{
+          const on=active.includes(i);
+          return <button key={i} onClick={()=>{ const n=Number(i); onChange(on?active.filter(x=>x!==n):[...active,n].sort((a,b)=>a-b)); }}
+            style={{padding:"7px 11px",borderRadius:20,border:`1.5px solid ${on?C.green:C.border}`,fontSize:13,fontWeight:700,cursor:"pointer",background:on?C.green+"22":"transparent",color:on?C.green:C.textMuted,transition:"all .15s"}}>{d}</button>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PriceEditor({prices,unitPrice,onChange,onChangeUnit}){
+  return (
+    <div style={{background:C.cardLight,borderRadius:12,padding:14,border:`1px solid ${C.border}`}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.textMuted,marginBottom:12,letterSpacing:"0.05em"}}>PRECIOS</div>
+      <div style={{marginBottom:14}}>
+        <label style={LBL}>Precio unitario (0 = usar paquetes)</label>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <input type="number" value={unitPrice||""} placeholder="ej: 8000" onChange={e=>onChangeUnit(parseInt(e.target.value)||0)} style={{...INP,flex:1}}/>
+          <span style={{fontSize:14,color:C.green,fontWeight:700,minWidth:70}}>{unitPrice>0?ars(unitPrice):"—"}</span>
+        </div>
+      </div>
+      <div style={{opacity:unitPrice>0?0.4:1}}>
+        <div style={{fontSize:12,color:C.textMuted,marginBottom:8,fontWeight:700,letterSpacing:"0.05em"}}>PAQUETES SEMANALES</div>
+        {[1,2,3,4,5].map(d=>(
+          <div key={d} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <span style={{fontSize:13,color:C.textMuted,minWidth:50}}>{d}d/sem</span>
+            <input type="number" value={prices[d-1]||""} placeholder="valor semanal" style={{...INP,flex:1}}
+              onChange={e=>{const p=[...prices];p[d-1]=parseInt(e.target.value)||0;onChange(p);}}/>
+            <span style={{fontSize:12,color:C.green,minWidth:60,textAlign:"right"}}>{prices[d-1]?ars(prices[d-1]):"—"}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function EmergencyEditor({dog,onChange}){
+  return (
+    <div style={{background:"#1a0f0f",borderRadius:12,padding:14,border:"1px solid #4a1515"}}>
+      <div style={{fontSize:12,fontWeight:700,color:"#fca5a5",marginBottom:12,letterSpacing:"0.05em"}}>🚨 EMERGENCIA & SALUD</div>
+      <div style={{display:"grid",gap:10}}>
+        {[{k:"vet",l:"Veterinario",p:"Nombre y teléfono"},{k:"medication",l:"Medicación",p:"ej: Comfortis mensual"},{k:"emergencyContact",l:"Contacto emergencia",p:"ej: Mamá 1166778899"}].map(f=>(
+          <div key={f.k}>
+            <label style={{...LBL,color:"#fca5a5"}}>{f.l}</label>
+            <input value={dog[f.k]||""} onChange={e=>onChange({...dog,[f.k]:e.target.value})} placeholder={f.p} style={{...INP,background:"#2a1515",border:"1px solid #4a1515"}}/>
+          </div>
+        ))}
+        <div>
+          <label style={{...LBL,color:"#fca5a5"}}>Hora de paseo preferida</label>
+          <input type="time" value={dog.walkTime||"08:00"} onChange={e=>onChange({...dog,walkTime:e.target.value})} style={{...INP,background:"#2a1515",border:"1px solid #4a1515"}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmergencyBadge({dog}){
+  const [open,setOpen]=useState(false);
+  const has=dog.vet||dog.medication||dog.emergencyContact;
+  if(!has) return null;
+  return (
+    <>
+      <button onClick={e=>{e.stopPropagation();setOpen(true);}} style={{background:"#2a1515",border:"1px solid #4a1515",borderRadius:8,padding:"3px 8px",fontSize:11,fontWeight:700,color:"#fca5a5",cursor:"pointer"}}>🚨</button>
+      {open&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setOpen(false)}>
+          <div style={{background:"#1a0f0f",borderRadius:20,padding:24,maxWidth:320,width:"100%",border:"1px solid #4a1515"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:800,fontSize:18,color:"#fca5a5",marginBottom:16}}>🚨 {dog.name}</div>
+            {dog.vet&&<div style={{marginBottom:10}}><div style={{fontSize:11,color:"#9ca3af",marginBottom:2}}>VETERINARIO</div><div style={{fontSize:14,color:C.text}}>{dog.vet}</div></div>}
+            {dog.medication&&<div style={{marginBottom:10}}><div style={{fontSize:11,color:"#9ca3af",marginBottom:2}}>MEDICACIÓN</div><div style={{fontSize:14,color:C.text}}>{dog.medication}</div></div>}
+            {dog.emergencyContact&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:"#9ca3af",marginBottom:2}}>EMERGENCIA</div><div style={{fontSize:14,color:C.text}}>{dog.emergencyContact}</div></div>}
+            <button onClick={()=>setOpen(false)} style={{...BTN(C.cardLight,C.text),width:"100%"}}>Cerrar</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function Modal({onClose,title,children}){
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:200,display:"flex",alignItems:"flex-start",overflowY:"auto"}} onClick={onClose}>
+      <div style={{background:C.card,borderRadius:"0 0 24px 24px",padding:24,width:"100%",maxWidth:480,margin:"0 auto",boxSizing:"border-box",border:`1px solid ${C.border}`,borderTop:"none"}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontWeight:800,fontSize:18,color:C.text,marginBottom:18}}>{title}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Confirm({icon,title,sub,onConfirm,onCancel,danger}){
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{background:C.card,borderRadius:20,padding:28,maxWidth:340,width:"100%",textAlign:"center",border:`1px solid ${C.border}`}}>
+        <div style={{fontSize:44,marginBottom:10}}>{icon}</div>
+        <div style={{fontWeight:800,fontSize:18,color:C.text,marginBottom:6}}>{title}</div>
+        {sub&&<div style={{fontSize:14,color:C.textMuted,marginBottom:20}}>{sub}</div>}
+        <div style={{display:"flex",gap:10,marginTop:20}}>
+          <button onClick={onCancel} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+          <button onClick={onConfirm} style={{...BTN(danger?"#7f1d1d":C.greenDark,C.text),flex:1}}>{danger?"Eliminar":"Confirmar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── AGENDA ────────────────────────────────────────────────────────────────────
+function Agenda({paseos,setPaseos,dogs,setDogs,clients,onAdd}){
+  const TODAY=getToday();
+  const [selDate,setSelDate]=useState(TODAY);
+  const [vyear,setVyear]=useState(()=>parseInt(TODAY.split("-")[0]));
+  const [vmonth,setVmonth]=useState(()=>parseInt(TODAY.split("-")[1])-1);
+  const [confirmAll,setConfAll]=useState(false);
+  const [cxlModal,setCxlM]=useState(null);
+
+  const dog=id=>dogs.find(d=>d.id===id);
+  const client=id=>clients.find(c=>c.id===id);
+  const dim=new Date(vyear,vmonth+1,0).getDate();
+  const fd=new Date(vyear,vmonth,1).getDay();
+  const dow=new Date(selDate+"T12:00:00").getDay();
+
+  const byDate=useMemo(()=>{
+    const m={};
+    paseos.forEach(p=>{(m[p.fecha]=m[p.fecha]||[]).push(p);});
+    return m;
+  },[paseos]);
+
+  const dayPaseos=useMemo(()=>
+    (byDate[selDate]||[]).slice().sort((a,b)=>{
+      const da=dogs.find(d=>d.id===a.dogId), db=dogs.find(d=>d.id===b.dogId);
+      return (da?.walkTime||"08:00").localeCompare(db?.walkTime||"08:00");
+    })
+  ,[byDate,selDate,dogs]);
+
+  const pending=dayPaseos.filter(p=>p.status==="programado");
+  const allDone=dayPaseos.length>0&&!pending.length;
+
+  const completeAll=()=>{ setPaseos(ps=>ps.map(p=>p.fecha===selDate&&p.status==="programado"?{...p,status:"completado"}:p)); setConfAll(false); };
+  const doCxl=(pid,by)=>{
+    setPaseos(ps=>ps.map(p=>p.id===pid?{...p,status:"cancelado",cancelBy:by}:p));
+    if(by==="client"){ const p=paseos.find(x=>x.id===pid); if(p) setDogs(ds=>ds.map(d=>d.id===p.dogId?{...d,cancellations:[...(d.cancellations||[]),{fecha:selDate,by:"client",nota:`Canceló el ${DAYS_ES[dow]}`}]}:d)); }
+    setCxlM(null);
+  };
+
+  const prev=()=>vmonth===0?(setVmonth(11),setVyear(y=>y-1)):setVmonth(m=>m-1);
+  const next=()=>vmonth===11?(setVmonth(0),setVyear(y=>y+1)):setVmonth(m=>m+1);
+
+  return (
+    <div>
+      {/* Calendario */}
+      <div style={{...CARD,padding:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <button onClick={prev} style={{...BTN("transparent",C.green),padding:"6px 12px",fontSize:18}}>‹</button>
+          <span style={{fontWeight:800,fontSize:15,color:C.text}}>{MONTHS_ES[vmonth]} {vyear}</span>
+          <button onClick={next} style={{...BTN("transparent",C.green),padding:"6px 12px",fontSize:18}}>›</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",marginBottom:4}}>
+          {DAYS_ES.map(d=><div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,color:C.textMuted,paddingBottom:4}}>{d}</div>)}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+          {Array.from({length:fd}).map((_,i)=><div key={`e${i}`}/>)}
+          {Array.from({length:dim}).map((_,i)=>{
+            const day=i+1, fecha=ds(vyear,vmonth,day);
+            const dp=byDate[fecha]||[];
+            const iT=fecha===TODAY, iS=fecha===selDate;
+            const hasDone=dp.some(p=>p.status==="completado"), hasPend=dp.some(p=>p.status==="programado");
+            return (
+              <div key={day} onClick={()=>setSelDate(fecha)}
+                style={{borderRadius:8,padding:"5px 2px",textAlign:"center",cursor:"pointer",
+                  background:iS?C.green:iT?C.green+"22":"transparent",
+                  border:iT&&!iS?`1.5px solid ${C.green}`:"1.5px solid transparent",
+                  display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                <span style={{fontSize:12,fontWeight:iS||iT?800:400,color:iS?"#0f1a14":iT?C.green:C.text}}>{day}</span>
+                {dp.length>0&&<div style={{width:5,height:5,borderRadius:"50%",background:iS?"#0f1a14":hasDone?C.green:hasPend?C.blue:"#4b5563"}}/>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text}}>
+          {new Date(selDate+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long"})}
+        </div>
+        <button onClick={()=>onAdd(selDate)} style={{...BTN(C.green,"#0f1a14"),padding:"7px 14px",fontSize:13}}>+ Paseo</button>
+      </div>
+
+      {dayPaseos.length===0&&(
+        <div style={{...CARD,textAlign:"center",padding:"32px 0",color:C.textMuted}}>Sin paseos este día 🐾</div>
+      )}
+
+      {dayPaseos.map(p=>{
+        const d=dog(p.dogId); if(!d) return null;
+        const cl=client(d.clientId);
+        const sc=SC[p.status];
+        return (
+          <div key={p.id} style={{...CARD,borderLeft:`4px solid ${p.status==="cancelado"?C.border:d.color}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                <div style={{width:44,height:44,borderRadius:"50%",background:d.color+"22",border:`2.5px solid ${p.status==="cancelado"?C.border:d.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,opacity:p.status==="cancelado"?0.4:1}}>🐕</div>
+                <div>
+                  <div style={{fontWeight:800,fontSize:16,color:p.status==="cancelado"?C.textMuted:C.text}}>
+                    {d.name}{p.manual?" 🔸":""}
+                    {d.walkTime&&d.walkTime!=="08:00"&&<span style={{fontSize:11,color:C.textMuted,marginLeft:6}}>🕐{d.walkTime}</span>}
+                  </div>
+                  <div style={{fontSize:13,color:C.textMuted}}>{cl?.name}</div>
+                  <div style={{fontSize:11,color:C.textMuted,marginTop:2}}>
+                    {d.unitPrice>0?`${ars(d.unitPrice)}/paseo`:`Pack ${d.schedule.length}d · ${ars(unitPriceFor(d.schedule.length,d.prices))}/paseo`}
+                  </div>
+                  {d.medication&&<div style={{fontSize:11,color:"#fca5a5",marginTop:2}}>💊 {d.medication}</div>}
+                </div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6}}>
+                <Tag bg={sc.bg} color={sc.text}>{p.status}</Tag>
+                <EmergencyBadge dog={d}/>
+              </div>
+            </div>
+            {p.status==="programado"&&(
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button onClick={()=>setCxlM({pid:p.id,dname:d.name})} style={{...BTN(C.cardLight,C.textMuted),flex:1,padding:9,fontSize:13}}>Cancelar</button>
+                {cl&&<a href={wa(cl.phone,`Hola ${cl.name}, confirmo el paseo de ${d.name} hoy 🐾`)} target="_blank" rel="noreferrer"
+                  style={{...BTN(C.wa,"white"),padding:"9px 14px",textDecoration:"none",display:"flex",alignItems:"center"}}>💬</a>}
+              </div>
+            )}
+            {p.status==="completado"&&<div style={{marginTop:8,fontSize:12,color:C.green,fontWeight:600}}>✓ Completado</div>}
+          </div>
+        );
+      })}
+
+      {pending.length>0&&(
+        <button onClick={()=>setConfAll(true)} style={{...BTN(C.green,"#0f1a14"),width:"100%",padding:14,fontSize:15,fontWeight:800,marginTop:4,borderRadius:14}}>
+          ✓ Completar paseo · {pending.length} perro{pending.length!==1?"s":""}
+        </button>
+      )}
+      {allDone&&dayPaseos.length>0&&<div style={{textAlign:"center",padding:14,fontSize:14,fontWeight:700,color:C.green,background:C.green+"22",borderRadius:14,marginTop:4}}>✓ ¡Todos completados!</div>}
+
+      {cxlModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.card,borderRadius:20,padding:24,maxWidth:340,width:"100%",border:`1px solid ${C.border}`}}>
+            <div style={{fontWeight:800,fontSize:18,color:C.text,textAlign:"center",marginBottom:6}}>¿Quién canceló?</div>
+            <div style={{fontSize:14,color:C.textMuted,textAlign:"center",marginBottom:18}}>{cxlModal.dname}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <button onClick={()=>doCxl(cxlModal.pid,"client")} style={{...BTN("#2a0f0f","#fca5a5"),textAlign:"left",padding:"12px 14px"}}>
+                😔 Canceló el cliente
+                <div style={{fontSize:11,opacity:.7,marginTop:2,fontWeight:400}}>Baja el pack esta semana</div>
+              </button>
+              <button onClick={()=>doCxl(cxlModal.pid,"me")} style={{...BTN("#0f1a2a","#93c5fd"),textAlign:"left",padding:"12px 14px"}}>
+                🙋 Cancelé yo
+                <div style={{fontSize:11,opacity:.7,marginTop:2,fontWeight:400}}>Descuento al precio unitario</div>
+              </button>
+              <button onClick={()=>setCxlM(null)} style={{...BTN(C.cardLight,C.textMuted)}}>Volver</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmAll&&(
+        <Confirm icon="🐾" title="¿Confirmar paseo?" sub={`${pending.length} perros`} onConfirm={completeAll} onCancel={()=>setConfAll(false)}/>
+      )}
+    </div>
+  );
+}
+
+// ── RUTAS ─────────────────────────────────────────────────────────────────────
+function Rutas({routes,setRoutes,dogs,clients,paseos,globalRoute,setGlobalRoute}){
+  const TODAY=getToday();
+  const [selDow,setSelDow]=useState(null);
+  const [editing,setEditing]=useState(false);
+  const [draft,setDraft]=useState(null);
+  const [editG,setEditG]=useState(false);
+  const [draftG,setDraftG]=useState(null);
+
+  const client=id=>clients.find(c=>c.id===id);
+  const origin=r=>r.origin||globalRoute.origin;
+  const dest=r=>r.destination||globalRoute.destination;
+  const dowHoy=new Date(TODAY+"T12:00:00").getDay();
+  const dogsOn=useCallback(dow=>dogs.filter(d=>d.schedule.includes(Number(dow))),[dogs]);
+  const cxlHoyIds=useMemo(()=>paseos.filter(p=>p.fecha===TODAY&&p.status==="cancelado").map(p=>p.dogId),[paseos,TODAY]);
+
+  const activeStops=useCallback((route)=>{
+    const isToday=Number(route.dow)===Number(dowHoy);
+    const cxl=isToday?cxlHoyIds:[];
+    const scheduled=dogsOn(route.dow).filter(d=>!cxl.includes(d.id));
+    const scheduledIds=new Set(dogsOn(route.dow).map(d=>d.id));
+    const manual=isToday?paseos.filter(p=>p.fecha===TODAY&&p.manual&&p.status!=="cancelado"&&!scheduledIds.has(p.dogId)).map(p=>dogs.find(d=>d.id===p.dogId)).filter(Boolean):[];
+    const all=[...scheduled,...manual];
+    if(!route.stopOrder?.length) return all;
+    return [...route.stopOrder.map(id=>all.find(d=>d.id===id)).filter(Boolean),...all.filter(d=>!route.stopOrder.includes(d.id))];
+  },[dogsOn,dowHoy,cxlHoyIds,paseos,dogs,TODAY]);
+
+  const allStops=useCallback(route=>{
+    const all=dogsOn(route.dow);
+    if(!route.stopOrder?.length) return all;
+    return [...route.stopOrder.map(id=>all.find(d=>d.id===id)).filter(Boolean),...all.filter(d=>!route.stopOrder.includes(d.id))];
+  },[dogsOn]);
+
+  const arrivals=(route,stops)=>{
+    let cur=route.startTime||"08:00"; const arr=[];
+    stops.forEach((_,i)=>{cur=addMin(cur,route.legMins?.[i]||0);arr.push(cur);});
+    arr.push(addMin(cur,route.legMins?.[stops.length]||0));
+    return arr;
+  };
+
+  const moveStop=(route,stops,from,to)=>{
+    const s=[...stops]; const [m]=s.splice(from,1); s.splice(to,0,m);
+    setRoutes(rs=>rs.map(r=>r.id===route.id?{...r,stopOrder:s.map(d=>d.id)}:r));
+  };
+
+  if(selDow===null) return (
+    <div>
+      <div style={{fontWeight:800,fontSize:18,color:C.text,marginBottom:4}}>Rutas por día</div>
+      <div style={{...CARD}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <span style={{fontWeight:700,fontSize:14,color:C.text}}>🏠 Puntos fijos</span>
+          <button onClick={()=>{setDraftG({...globalRoute});setEditG(true);}} style={{...BTN(C.cardLight,C.green),padding:"6px 12px",fontSize:12}}>✏️ Editar</button>
+        </div>
+        <div style={{fontSize:13,color:globalRoute.origin?C.text:C.textMuted,marginBottom:4}}>📍 {globalRoute.origin||"Partida sin configurar"}</div>
+        <div style={{fontSize:13,color:globalRoute.destination?C.text:C.textMuted}}>🏁 {globalRoute.destination||"Destino sin configurar"}</div>
+      </div>
+      {routes.map(r=>{
+        const dd=dogsOn(r.dow);
+        return (
+          <div key={r.id} onClick={()=>setSelDow(r.dow)} style={{...CARD,cursor:"pointer",display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:48,height:48,borderRadius:12,background:dd.length?C.green+"22":C.cardLight,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>{dd.length?"🦮":"😴"}</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:16,color:C.text}}>{r.label}</div>
+              <div style={{fontSize:13,color:C.textMuted}}>{dd.length?`${dd.length} perro${dd.length>1?"s":""} · Sale ${r.startTime}`:"Sin paseos"}</div>
+              {dd.length>0&&(origin(r)&&dest(r)?<div style={{fontSize:11,color:C.green}}>✓ Lista</div>:<div style={{fontSize:11,color:C.amber}}>⚠ Falta configurar</div>)}
+            </div>
+            <span style={{color:C.textMuted,fontSize:18}}>›</span>
+          </div>
+        );
+      })}
+      {editG&&draftG&&(
+        <Modal onClose={()=>setEditG(false)} title="🏠 Puntos fijos">
+          <div style={{display:"grid",gap:12}}>
+            <div><label style={LBL}>📍 Partida</label><input value={draftG.origin} onChange={e=>setDraftG(g=>({...g,origin:e.target.value}))} placeholder="Tu casa" style={INP}/></div>
+            <div><label style={LBL}>🏁 Destino</label><input value={draftG.destination} onChange={e=>setDraftG(g=>({...g,destination:e.target.value}))} placeholder="Plaza / parque" style={INP}/></div>
+          </div>
+          <div style={{display:"flex",gap:10,marginTop:18}}>
+            <button onClick={()=>setEditG(false)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={()=>{setGlobalRoute(draftG);setEditG(false);}} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Guardar</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+
+  const route=routes.find(r=>r.dow===selDow);
+  const stops=activeStops(route);
+  const aStops=allStops(route);
+  const arr=arrivals(route,stops);
+  const orig=origin(route), dst=dest(route);
+  const addrs=[orig,...stops.map(d=>client(d.clientId)?.address||""),dst];
+  const fullUrl=orig&&dst&&stops.length>0?gDir(addrs):null;
+  const isToday=Number(selDow)===Number(dowHoy);
+  const cxlIds=isToday?cxlHoyIds:[];
+
+  return (
+    <div>
+      <button onClick={()=>setSelDow(null)} style={{...BTN("transparent",C.green),padding:"0 0 14px",fontSize:14}}>← Volver</button>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div style={{fontWeight:800,fontSize:20,color:C.text}}>{route.label}</div>
+        <button onClick={()=>{const d={...route,legMins:[...(route.legMins||[])],stopOrder:aStops.map(d=>d.id)};while(d.legMins.length<aStops.length+1)d.legMins.push(0);setDraft(d);setEditing(true);}} style={{...BTN(C.cardLight,C.green),padding:"7px 14px",fontSize:13}}>✏️ Editar</button>
+      </div>
+
+      <div style={CARD}>
+        <div style={{fontSize:11,color:C.textMuted,fontWeight:700,marginBottom:12,letterSpacing:"0.05em"}}>RECORRIDO · SALE {route.startTime}</div>
+        <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:4}}>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+            <div style={{width:12,height:12,borderRadius:"50%",background:C.green,marginTop:2,flexShrink:0}}/>
+            {(stops.length>0||dst)&&<div style={{width:2,flex:1,minHeight:20,background:C.border}}/>}
+          </div>
+          <div style={{flex:1,paddingBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontSize:11,color:C.textMuted}}>PARTIDA</span>
+              <span style={{fontSize:14,fontWeight:800,color:C.green}}>{route.startTime}</span>
+            </div>
+            <div style={{fontSize:13,color:orig?C.text:C.textMuted}}>{orig||"Sin configurar"}</div>
+            {stops.length>0&&orig&&addrs[1]&&<a href={g2(orig,addrs[1])} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:4,fontSize:11,color:C.blue,fontWeight:700,textDecoration:"none",background:C.blue+"22",borderRadius:6,padding:"2px 8px"}}>🗺 Maps →</a>}
+          </div>
+        </div>
+        {stops.map((d,i)=>{
+          const cl=client(d.clientId), isLast=i===stops.length-1;
+          const nextAddr=isLast?dst:addrs[i+2], nextName=isLast?"destino":stops[i+1]?.name;
+          return (
+            <div key={d.id} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:4}}>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center"}}>
+                <div style={{width:12,height:12,borderRadius:"50%",background:d.color,flexShrink:0,marginTop:2}}/>
+                {(!isLast||dst)&&<div style={{width:2,flex:1,minHeight:20,background:C.border}}/>}
+              </div>
+              <div style={{flex:1,paddingBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div>
+                    <div style={{fontSize:11,color:C.textMuted}}>PARADA {i+1} · {d.name}</div>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{cl?.name}</div>
+                    <div style={{fontSize:12,color:C.textMuted}}>📍 {cl?.address}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                    <div style={{fontSize:15,fontWeight:800,color:C.green}}>{arr[i]}</div>
+                    {route.legMins?.[i]>0&&<div style={{fontSize:10,color:C.textMuted}}>{route.legMins[i]}min</div>}
+                  </div>
+                </div>
+                {nextAddr&&cl?.address&&<a href={g2(cl.address,nextAddr)} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:4,fontSize:11,color:C.blue,fontWeight:700,textDecoration:"none",background:C.blue+"22",borderRadius:6,padding:"2px 8px"}}>🗺 → {nextName}</a>}
+              </div>
+            </div>
+          );
+        })}
+        {dst&&(
+          <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+            <div style={{width:12,height:12,borderRadius:"50%",background:C.red,flexShrink:0,marginTop:2}}/>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:11,color:C.textMuted}}>DESTINO</span>
+                {stops.length>0&&<span style={{fontSize:15,fontWeight:800,color:C.green}}>{arr[stops.length]}</span>}
+              </div>
+              <div style={{fontSize:13,color:C.text}}>{dst}</div>
+            </div>
+          </div>
+        )}
+        {!stops.length&&<div style={{textAlign:"center",padding:16,color:C.textMuted,fontSize:13}}>Sin perros activos este día</div>}
+      </div>
+
+      {fullUrl?<a href={fullUrl} target="_blank" rel="noreferrer" style={{...BTN(C.blue,"white"),display:"block",textDecoration:"none",textAlign:"center",marginBottom:12,padding:13,fontSize:14,borderRadius:14}}>🗺 Ver recorrido completo en Maps</a>
+        :<div style={{background:"#1a1200",borderRadius:12,padding:12,fontSize:13,color:C.amber,marginBottom:12,textAlign:"center",border:"1px solid #4a3a00"}}>⚠ Configurá los puntos fijos para ver la ruta</div>}
+
+      {stops.length>1&&(
+        <div style={CARD}>
+          <div style={{fontSize:11,color:C.textMuted,fontWeight:700,marginBottom:12,letterSpacing:"0.05em"}}>ORDEN DE RECOGIDA</div>
+          {stops.map((d,i)=>{
+            const cl=client(d.clientId), cxl=cxlIds.includes(d.id);
+            const isManual=!dogsOn(route.dow).some(sd=>sd.id===d.id);
+            return (
+              <div key={d.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<stops.length-1?`1px solid ${C.border}`:"none",opacity:cxl?0.4:1}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:cxl?C.border:d.color,flexShrink:0}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:C.text}}>{i+1}. {d.name}{isManual&&<Tag bg="#2a1a00" color={C.amber}> manual</Tag>}</div>
+                  <div style={{fontSize:12,color:C.textMuted}}>{cl?.name}{cxl?" · ❌ Canceló":""}</div>
+                </div>
+                <div style={{display:"flex",gap:4}}>
+                  {[["↑",i>0,()=>moveStop(route,stops,i,i-1)],["↓",i<stops.length-1,()=>moveStop(route,stops,i,i+1)]].map(([lbl,en,fn])=>(
+                    <button key={lbl} onClick={en?fn:undefined} disabled={!en}
+                      style={{background:en?C.green+"22":C.cardLight,color:en?C.green:C.border,border:"none",borderRadius:8,width:32,height:28,fontSize:14,cursor:en?"pointer":"default",fontWeight:700}}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing&&draft&&(
+        <Modal onClose={()=>setEditing(false)} title={`✏️ Tiempos · ${route.label}`}>
+          <div style={{display:"grid",gap:12}}>
+            <div><label style={LBL}>Hora de salida</label><input type="time" value={draft.startTime} onChange={e=>setDraft(d=>({...d,startTime:e.target.value}))} style={INP}/></div>
+            <div style={{background:C.cardLight,borderRadius:10,padding:12}}>
+              <div style={{fontSize:11,color:C.textMuted,marginBottom:8,fontWeight:700,letterSpacing:"0.05em"}}>PUNTOS OPCIONALES</div>
+              <div><label style={LBL}>Partida</label><input value={draft.origin||""} onChange={e=>setDraft(d=>({...d,origin:e.target.value}))} placeholder={globalRoute.origin||"Global"} style={INP}/></div>
+              <div style={{marginTop:8}}><label style={LBL}>Destino</label><input value={draft.destination||""} onChange={e=>setDraft(d=>({...d,destination:e.target.value}))} placeholder={globalRoute.destination||"Global"} style={INP}/></div>
+            </div>
+            {aStops.length>0&&(
+              <div style={{background:C.cardLight,borderRadius:10,padding:12}}>
+                <div style={{fontSize:11,color:C.textMuted,marginBottom:10,fontWeight:700,letterSpacing:"0.05em"}}>MINUTOS ENTRE PUNTOS</div>
+                {[origin(draft)||"Partida",...aStops.map(d=>d.name)].map((name,i)=>{
+                  const nextName=i<aStops.length?aStops[i]?.name:"Destino";
+                  const fa=i===0?(origin(draft)||""):(client(aStops[i-1]?.clientId)?.address||"");
+                  const ta=i<aStops.length?(client(aStops[i]?.clientId)?.address||""):(dest(draft)||"");
+                  const cum=draft.legMins.slice(0,i+1).reduce((a,b)=>a+(b||0),0);
+                  return (
+                    <div key={i} style={{marginBottom:10}}>
+                      <div style={{fontSize:12,color:C.textMuted,marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <span>{i===0?"Partida":name} → {nextName}</span>
+                        {fa&&ta&&<a href={g2(fa,ta)} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.blue,fontWeight:700,textDecoration:"none",background:C.blue+"22",borderRadius:6,padding:"2px 8px"}}>🗺</a>}
+                      </div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <input type="number" min="0" value={draft.legMins[i]||""} placeholder="min" onChange={e=>{const l=[...draft.legMins];l[i]=parseInt(e.target.value)||0;setDraft(d=>({...d,legMins:l}));}} style={{...INP,width:70,flex:"none"}}/>
+                        <span style={{fontSize:12,color:C.textMuted}}>→ <b style={{color:C.green}}>{addMin(draft.startTime,cum)}</b></span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <div style={{display:"flex",gap:10,marginTop:18}}>
+            <button onClick={()=>setEditing(false)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={()=>{setRoutes(rs=>rs.map(r=>r.id===draft.id?draft:r));setEditing(false);}} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Guardar</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── COBROS ────────────────────────────────────────────────────────────────────
+function Cobros({paseos,setPaseos,dogs,clients}){
+  const TODAY=getToday();
+  const [confirmPay,setConfPay]=useState(null);
+  const [ajustes,setAjustes]=useState({});
+  const week=weekRange(TODAY);
+
+  const summary=useMemo(()=>clients.map(cl=>{
+    const cd=dogs.filter(d=>d.clientId===cl.id);
+    return cd.map(dog=>{
+      const all=paseos.filter(p=>p.dogId===dog.id);
+      const wp=all.filter(p=>p.fecha>=week.from&&p.fecha<=week.to);
+      const calc=calcCobro(wp,dog);
+      const unpaidW=wp.filter(p=>p.status==="completado"&&!p.paid);
+      const unpaidO=all.filter(p=>p.status==="completado"&&!p.paid&&(p.fecha<week.from||p.fecha>week.to));
+      const abonadoW=unpaidW.reduce((s,p)=>s+(p.paidAmount||0),0);
+      let oldDebt=0;
+      if(dog.unitPrice>0){ oldDebt=unpaidO.reduce((s,p)=>s+(p.price-(p.paidAmount||0)),0); }
+      else {
+        const bw={}; all.filter(p=>p.fecha<week.from||p.fecha>week.to).forEach(p=>{const k=weekRange(p.fecha).from;if(!bw[k])bw[k]=[];bw[k].push(p);});
+        Object.values(bw).forEach(sp=>{ if(!sp.some(p=>p.status==="completado"&&!p.paid)) return; const c=calcCobroPaquete(sp,dog); const ab=sp.filter(p=>p.status==="completado"&&!p.paid).reduce((s,p)=>s+(p.paidAmount||0),0); oldDebt+=Math.max(c.cobro-ab,0); });
+      }
+      return {cl,dog,calc,unpaidW,unpaidO,weekCharge:unpaidW.length>0?Math.max(calc.cobro-abonadoW,0):0,oldAmount:oldDebt};
+    });
+  }).flat().filter(x=>x.dog.schedule.length>0),[paseos,dogs,clients,week]);
+
+  const byClient=useMemo(()=>{
+    const m={};
+    summary.forEach(s=>{
+      if(!m[s.cl.id]) m[s.cl.id]={cl:s.cl,dogs:[],base:0,ids:[],adjWalks:[]};
+      m[s.cl.id].dogs.push(s);
+      m[s.cl.id].base+=s.weekCharge+s.oldAmount;
+      m[s.cl.id].ids.push(...s.unpaidW.map(p=>p.id),...s.unpaidO.map(p=>p.id));
+      if(s.calc.modo==="paquete"&&s.unpaidW.length>0) s.unpaidW.forEach((p,i)=>m[s.cl.id].adjWalks.push({id:p.id,price:i===0?s.calc.cobro:0}));
+      else m[s.cl.id].adjWalks.push(...s.unpaidW.map(p=>({id:p.id,price:s.calc.precio||0})));
+      if(s.calc.modo==="paquete"&&s.unpaidO.length>0){
+        const bw={}; paseos.filter(p=>p.dogId===s.dog.id&&(p.fecha<week.from||p.fecha>week.to)).forEach(p=>{const k=weekRange(p.fecha).from;if(!bw[k])bw[k]=[];bw[k].push(p);});
+        Object.values(bw).forEach(sp=>{ if(!sp.some(p=>p.status==="completado"&&!p.paid)) return; const c=calcCobroPaquete(sp,s.dog); sp.filter(p=>p.status==="completado"&&!p.paid).forEach((p,i)=>m[s.cl.id].adjWalks.push({id:p.id,price:i===0?c.cobro:0})); });
+      } else m[s.cl.id].adjWalks.push(...s.unpaidO.map(p=>({id:p.id,price:p.price})));
+    });
+    return Object.values(m);
+  },[summary,paseos,week]);
+
+  const adjTotal=(cid,base)=>{ const a=ajustes[cid]; if(!a||!a.val) return base; return a.type==="pct"?Math.round(base*(1-a.val/100)):base+a.val; };
+  const totalCobrado=paseos.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0);
+  const totalPend=byClient.reduce((s,{cl,base})=>s+Math.max(adjTotal(cl.id,base),0),0);
+
+  const doCollect=({ids,adjWalks,cid})=>{ setPaseos(ps=>ps.map(p=>{ if(!ids.includes(p.id)) return p; const adj=adjWalks.find(a=>a.id===p.id); return {...p,paid:true,paidAmount:adj?adj.price:p.price}; })); setAjustes(a=>({...a,[cid]:undefined})); setConfPay(null); };
+  const doPartial=({ids,adjWalks,cid,parcial})=>{
+    let r=parcial;
+    setPaseos(ps=>ps.map(p=>{ if(!ids.includes(p.id)||r<=0) return p; const ae=adjWalks.find(a=>a.id===p.id); const pr=ae!==undefined?ae.price:p.price; const ya=p.paidAmount||0; const d=pr-ya; if(d<=0) return p; const ap=Math.min(r,d); r-=ap; const np=ya+ap; return {...p,paidAmount:np,paid:np>=pr}; }));
+    setAjustes(a=>({...a,[cid]:undefined})); setConfPay(null);
+  };
+
+  return (
+    <div>
+      <div style={{fontWeight:800,fontSize:18,color:C.text,marginBottom:4}}>Cobros</div>
+      <div style={{fontSize:12,color:C.textMuted,marginBottom:14}}>Semana {week.from} → {week.to}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:18}}>
+        {[{label:"Cobrado",val:totalCobrado,bg:"#14532d",color:C.green},{label:"Por cobrar",val:totalPend,bg:"#451a03",color:C.amber}].map(s=>(
+          <div key={s.label} style={{background:s.bg,borderRadius:14,padding:14,border:`1px solid ${s.color}44`}}>
+            <div style={{fontSize:11,color:s.color,opacity:.8}}>{s.label}</div>
+            <div style={{fontSize:20,fontWeight:800,color:s.color,marginTop:4}}>{ars(s.val)}</div>
+          </div>
+        ))}
+      </div>
+
+      {byClient.map(({cl,dogs:cd,base,ids,adjWalks})=>{
+        const aj=ajustes[cl.id]||{type:"pesos",val:0};
+        const fin=adjTotal(cl.id,base), dif=fin-base;
+        const abonParcial=paseos.filter(p=>ids.includes(p.id)&&(p.paidAmount||0)>0).reduce((s,p)=>s+(p.paidAmount||0),0);
+        return (
+          <div key={cl.id} style={CARD}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+              <div>
+                <div style={{fontWeight:800,fontSize:17,color:C.text}}>{cl.name}</div>
+                <div style={{fontSize:12,color:C.textMuted}}>{cd.map(x=>x.dog.name).join(", ")}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:11,color:C.textMuted}}>Total</div>
+                <div style={{fontSize:22,fontWeight:800,color:fin>0?C.amber:C.green}}>{ars(fin)}</div>
+                {dif!==0&&<div style={{fontSize:11,color:dif<0?C.green:C.red}}>{dif>0?"+":""}{ars(dif)}</div>}
+              </div>
+            </div>
+
+            {cd.map(({dog,calc,unpaidW,unpaidO,oldAmount,weekCharge})=>(
+              <div key={dog.id} style={{background:C.cardLight,borderRadius:10,padding:12,marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:dog.color}}/>
+                    <b style={{fontSize:14,color:C.text}}>{dog.name}</b>
+                  </div>
+                  <b style={{fontSize:14,color:C.green}}>{ars(weekCharge+oldAmount)}</b>
+                </div>
+                {unpaidW.length>0&&(
+                  <div style={{fontSize:12,color:C.textMuted}}>
+                    {calc.modo==="unitario"?(
+                      <>{calc.realizados} × {ars(calc.precio)} = <span style={{color:C.green,fontWeight:700}}>{ars(calc.cobro)}</span></>
+                    ):(
+                      <>Pack {calc.packContratado}d{calc.cxlCliente>0?` → baja a ${calc.packResultante}d`:""}{calc.cxlYo>0?` · -${ars(calc.descuentoCxlYo)}`:""} = <span style={{color:C.green,fontWeight:700}}>{ars(calc.cobro)}</span></>
+                    )}
+                  </div>
+                )}
+                {oldAmount>0&&<div style={{fontSize:12,color:C.red,marginTop:4}}>+ Semanas ant.: {ars(oldAmount)}</div>}
+                {!weekCharge&&!oldAmount&&<div style={{fontSize:12,color:C.green}}>✅ Al día</div>}
+              </div>
+            ))}
+
+            {abonParcial>0&&fin>0&&(
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                  <span style={{color:C.green}}>Abonado: {ars(abonParcial)}</span>
+                  <span style={{color:C.amber}}>Resta: {ars(fin)}</span>
+                </div>
+                <div style={{background:C.border,borderRadius:20,height:5,overflow:"hidden"}}>
+                  <div style={{height:"100%",background:C.green,borderRadius:20,width:`${Math.min((abonParcial/(abonParcial+fin))*100,100)}%`}}/>
+                </div>
+              </div>
+            )}
+
+            {fin>0&&(
+              <div style={{background:C.cardLight,borderRadius:10,padding:10,marginBottom:10}}>
+                <div style={{fontSize:11,color:C.textMuted,marginBottom:6,fontWeight:700,letterSpacing:"0.05em"}}>AJUSTE MANUAL</div>
+                <div style={{display:"flex",gap:6}}>
+                  <select value={aj.type} onChange={e=>setAjustes(a=>({...a,[cl.id]:{...aj,type:e.target.value,val:0}}))} style={{...INP,width:100,flex:"none",padding:"8px 10px"}}>
+                    <option value="pesos">+ / - $</option><option value="pct">% desc.</option>
+                  </select>
+                  <input type="number" value={aj.val||""} placeholder={aj.type==="pct"?"10":"-5000"} onChange={e=>setAjustes(a=>({...a,[cl.id]:{...aj,val:parseFloat(e.target.value)||0}}))} style={INP}/>
+                </div>
+              </div>
+            )}
+
+            <div style={{display:"flex",gap:8}}>
+              {fin>0&&<button onClick={()=>setConfPay({cl,amount:fin,ids,adjWalks,cid:cl.id})} style={{...BTN(C.green,"#0f1a14"),flex:2,fontWeight:800}}>💰 Cobrar {ars(fin)}</button>}
+              <a href={wa(cl.phone,fin>0?`Hola ${cl.name}! Resumen:\n${cd.map(({dog,calc})=>calc.realizados>0?`🐕 ${dog.name}: ${ars(calc.cobro)}`:"").filter(Boolean).join("\n")}\nTotal: ${ars(fin)} 🐾`:`Hola ${cl.name}, todo al día esta semana 🐾`)} target="_blank" rel="noreferrer"
+                style={{...BTN(C.wa,"white"),flex:1,textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}}>💬</a>
+            </div>
+          </div>
+        );
+      })}
+
+      {confirmPay&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{background:C.card,borderRadius:20,padding:24,maxWidth:340,width:"100%",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:28,textAlign:"center",marginBottom:8}}>💰</div>
+            <div style={{fontWeight:800,fontSize:18,color:C.text,textAlign:"center",marginBottom:4}}>Confirmar cobro</div>
+            <div style={{fontSize:14,color:C.textMuted,textAlign:"center",marginBottom:16}}>{confirmPay.cl.name}</div>
+            <label style={LBL}>Monto</label>
+            <input type="number" value={confirmPay.parcial!==undefined?confirmPay.parcial:confirmPay.amount}
+              onChange={e=>setConfPay(p=>({...p,parcial:parseInt(e.target.value)||0}))}
+              style={{...INP,fontSize:22,fontWeight:800,textAlign:"right",color:C.green,marginBottom:8}}/>
+            <div style={{display:"flex",gap:6,marginBottom:16}}>
+              {[25,50,75,100].map(pct=>(
+                <button key={pct} onClick={()=>setConfPay(p=>({...p,parcial:Math.round(p.amount*pct/100)}))}
+                  style={{flex:1,background:C.green+"22",border:`1px solid ${C.green}44`,borderRadius:8,padding:"5px 0",fontSize:11,fontWeight:700,color:C.green,cursor:"pointer"}}>{pct}%</button>
+              ))}
+            </div>
+            {confirmPay.parcial!==undefined&&confirmPay.parcial<confirmPay.amount&&<div style={{fontSize:12,color:C.amber,textAlign:"center",marginBottom:8}}>⚠ Pago parcial</div>}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setConfPay(null)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+              <button onClick={()=>{ const m=confirmPay.parcial!==undefined?confirmPay.parcial:confirmPay.amount; if(m<confirmPay.amount) doPartial({...confirmPay,parcial:m}); else doCollect(confirmPay); }} style={{...BTN(C.green,"#0f1a14"),flex:2}}>
+                {(()=>{ const m=confirmPay.parcial!==undefined?confirmPay.parcial:confirmPay.amount; return m<confirmPay.amount?`Abonar ${ars(m)}`:`Cobrado ✓`; })()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── CLIENTES ──────────────────────────────────────────────────────────────────
+function Clientes({dogs,setDogs,clients,setClients,paseos,setPaseos,onAdd}){
+  const [sel,setSel]=useState(null);
+  const [editC,setEditC]=useState(null);
+  const [editD,setEditD]=useState(null);
+  const [delC,setDelC]=useState(false);
+  const [delD,setDelD]=useState(null);
+  const [addD,setAddD]=useState(false);
+  const emptyDog={name:"",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",schedule:[],prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[]};
+  const [nDog,setNDog]=useState({...emptyDog});
+
+  const saveEditDog=()=>{ const u=editD; setPaseos(ps=>{const kept=ps.filter(p=>!(p.dogId===u.id&&p.status==="programado"&&p.fecha>=getToday()));return [...kept,...makePaseos(u,kept)];}); setDogs(ds=>ds.map(d=>d.id===u.id?u:d)); setEditD(null); };
+  const doAddDog=cId=>{ if(!nDog.name) return; const colors=["#f59e0b","#10b981","#3b82f6","#8b5cf6","#ec4899","#f97316","#14b8a6"]; const dog={...nDog,id:Date.now(),clientId:cId,color:colors[dogs.length%colors.length]}; setDogs(ds=>[...ds,dog]); setPaseos(ps=>[...ps,...makePaseos(dog,ps)]); setNDog({...emptyDog}); setAddD(false); };
+  const doDelDog=id=>{ setDogs(ds=>ds.filter(d=>d.id!==id)); setPaseos(ps=>ps.filter(p=>p.dogId!==id)); setDelD(null); };
+  const doDelClient=cId=>{ const ids=dogs.filter(d=>d.clientId===cId).map(d=>d.id); setDogs(ds=>ds.filter(d=>d.clientId!==cId)); setPaseos(ps=>ps.filter(p=>!ids.includes(p.dogId))); setClients(cs=>cs.filter(c=>c.id!==cId)); setSel(null); setDelC(false); };
+
+  if(!sel) return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <div style={{fontWeight:800,fontSize:18,color:C.text}}>Clientes</div>
+        <button onClick={onAdd} style={{...BTN(C.green,"#0f1a14"),padding:"8px 16px",fontSize:13}}>+ Añadir</button>
+      </div>
+      {clients.map(c=>{
+        const cd=dogs.filter(d=>d.clientId===c.id);
+        const pw=paseos.filter(p=>cd.some(d=>d.id===p.dogId)&&p.status==="completado").length;
+        return (
+          <div key={c.id} onClick={()=>setSel(c.id)} style={{...CARD,cursor:"pointer",display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:48,height:48,borderRadius:"50%",background:C.green+"22",border:`2px solid ${C.green}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>👤</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:16,color:C.text}}>{c.name}</div>
+              <div style={{fontSize:13,color:C.textMuted}}>{cd.map(d=>d.name).join(", ")||"Sin perros"} · {pw} paseos</div>
+            </div>
+            <span style={{color:C.textMuted,fontSize:18}}>›</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const cl=clients.find(c=>c.id===sel);
+  const cd=dogs.filter(d=>d.clientId===sel);
+  const aw=paseos.filter(p=>cd.some(d=>d.id===p.dogId));
+  const cxls=cd.flatMap(d=>(d.cancellations||[]).map(c=>({...c,dname:d.name}))).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+
+  return (
+    <div>
+      <button onClick={()=>setSel(null)} style={{...BTN("transparent",C.green),padding:"0 0 14px",fontSize:14}}>← Volver</button>
+      <div style={CARD}>
+        <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:12}}>
+          <div style={{width:54,height:54,borderRadius:"50%",background:C.green+"22",border:`2px solid ${C.green}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>👤</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,fontSize:20,color:C.text}}>{cl?.name}</div>
+            <div style={{fontSize:13,color:C.textMuted}}>{cl?.phone}</div>
+            <div style={{fontSize:12,color:C.textMuted}}>📍 {cl?.address||"Sin dirección"}</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          {[{label:"PASEOS",val:aw.filter(p=>p.status==="completado").length},{label:"COBRADO",val:ars(aw.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0))}].map(s=>(
+            <div key={s.label} style={{background:C.cardLight,borderRadius:10,padding:"10px 12px"}}>
+              <div style={{fontSize:10,color:C.textMuted,fontWeight:700,letterSpacing:"0.05em"}}>{s.label}</div>
+              <div style={{fontSize:18,fontWeight:800,color:C.green,marginTop:2}}>{s.val}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={()=>setEditC({...cl,contacts:[...(cl.contacts||[])]})} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>✏️ Editar</button>
+          <a href={wa(cl?.phone||"",`Hola ${cl?.name}, `)} target="_blank" rel="noreferrer" style={{...BTN(C.wa,"white"),flex:1,textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}}>💬 WhatsApp</a>
+        </div>
+        <button onClick={()=>setDelC(true)} style={{...BTN("#1a0505","#fca5a5"),width:"100%",marginTop:8,fontSize:13}}>🗑 Eliminar cliente</button>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{fontWeight:700,fontSize:15,color:C.text}}>🐕 Perros</div>
+        <button onClick={()=>setAddD(true)} style={{...BTN(C.green,"#0f1a14"),padding:"6px 14px",fontSize:13}}>+ Perro</button>
+      </div>
+      {cd.map(dog=>(
+        <div key={dog.id} style={CARD}>
+          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10}}>
+            <div style={{width:44,height:44,borderRadius:"50%",background:dog.color+"22",border:`2.5px solid ${dog.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>🐕</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:16,color:C.text}}>{dog.name}</div>
+              <div style={{fontSize:13,color:C.textMuted}}>{dog.breed||"—"}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontWeight:700,color:C.green,fontSize:16}}>{ars(dog.unitPrice>0?dog.unitPrice:priceFor(dog.schedule.length,dog.prices))}</div>
+              <div style={{fontSize:11,color:C.textMuted}}>{dog.unitPrice>0?"por paseo":`${dog.schedule.length}d/sem`}</div>
+            </div>
+          </div>
+          {dog.schedule.length>0&&(
+            <div style={{background:C.cardLight,borderRadius:8,padding:"8px 10px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {dog.schedule.map(d=><span key={d} style={{background:C.green,color:"#0f1a14",fontSize:12,padding:"2px 8px",borderRadius:12,fontWeight:700}}>{DAYS_ES[d]}</span>)}
+              </div>
+              {dog.walkTime&&<span style={{fontSize:12,color:C.textMuted}}>🕐 {dog.walkTime}</span>}
+            </div>
+          )}
+          {(dog.vet||dog.medication||dog.emergencyContact)&&(
+            <div style={{background:"#1a0f0f",borderRadius:8,padding:"8px 10px",marginBottom:8,border:"1px solid #4a1515"}}>
+              <div style={{fontSize:10,color:"#fca5a5",fontWeight:700,marginBottom:4,letterSpacing:"0.05em"}}>🚨 EMERGENCIA</div>
+              {dog.vet&&<div style={{fontSize:12,color:C.textMuted}}>🏥 {dog.vet}</div>}
+              {dog.medication&&<div style={{fontSize:12,color:C.textMuted}}>💊 {dog.medication}</div>}
+              {dog.emergencyContact&&<div style={{fontSize:12,color:C.textMuted}}>📞 {dog.emergencyContact}</div>}
+            </div>
+          )}
+          {dog.notes&&<div style={{background:"#1a1200",borderRadius:8,padding:"8px 10px",marginBottom:8,border:"1px solid #4a3a00"}}><div style={{fontSize:10,color:C.amber,fontWeight:700,letterSpacing:"0.05em"}}>NOTAS</div><div style={{fontSize:12,color:C.textMuted,marginTop:2}}>📝 {dog.notes}</div></div>}
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setEditD({...dog,schedule:[...dog.schedule],prices:[...dog.prices]})} style={{...BTN(C.cardLight,C.textMuted),flex:1,fontSize:13}}>✏️ Editar</button>
+            <button onClick={()=>setDelD(dog.id)} style={{...BTN("#1a0505","#fca5a5"),flex:1,fontSize:13}}>🗑</button>
+          </div>
+        </div>
+      ))}
+
+      {cxls.length>0&&(
+        <div style={CARD}>
+          <div style={{fontSize:11,color:C.textMuted,fontWeight:700,marginBottom:10,letterSpacing:"0.05em"}}>CANCELACIONES</div>
+          {cxls.map((c,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingBottom:8,marginBottom:8,borderBottom:i<cxls.length-1?`1px solid ${C.border}`:"none"}}>
+              <div><div style={{fontSize:13,fontWeight:600,color:C.text}}>{c.dname} · {c.fecha}</div><div style={{fontSize:11,color:C.textMuted}}>{c.nota}</div></div>
+              <Tag bg={c.by==="client"?"#2a0f0f":"#0f1a2a"} color={c.by==="client"?"#fca5a5":"#93c5fd"}>{c.by==="client"?"Cliente":"Yo"}</Tag>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editC&&(
+        <Modal onClose={()=>setEditC(null)} title={`✏️ ${editC.name}`}>
+          <div style={{display:"grid",gap:12}}>
+            {[{k:"name",l:"Nombre"},{k:"phone",l:"WhatsApp"},{k:"address",l:"Dirección"}].map(f=>(
+              <div key={f.k}><label style={LBL}>{f.l}</label><input value={editC[f.k]||""} onChange={e=>setEditC(c=>({...c,[f.k]:e.target.value}))} style={INP}/></div>
+            ))}
+            <div style={{background:C.cardLight,borderRadius:10,padding:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:11,color:C.textMuted,fontWeight:700,letterSpacing:"0.05em"}}>CONTACTOS ADICIONALES</div>
+                <button onClick={()=>setEditC(c=>({...c,contacts:[...(c.contacts||[]),{name:"",phone:""}]}))} style={{...BTN(C.green,"#0f1a14"),padding:"4px 10px",fontSize:12}}>+ Agregar</button>
+              </div>
+              {!(editC.contacts||[]).length&&<div style={{fontSize:12,color:C.textMuted}}>Sin contactos</div>}
+              {(editC.contacts||[]).map((ct,i)=>(
+                <div key={i} style={{background:C.card,borderRadius:8,padding:10,marginBottom:6}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                    <div><label style={{...LBL,fontSize:10}}>Nombre</label><input value={ct.name} onChange={e=>{const cs=[...(editC.contacts||[])];cs[i]={...cs[i],name:e.target.value};setEditC(c=>({...c,contacts:cs}));}} style={{...INP,padding:"7px 10px",fontSize:13}}/></div>
+                    <div><label style={{...LBL,fontSize:10}}>WhatsApp</label><input value={ct.phone} onChange={e=>{const cs=[...(editC.contacts||[])];cs[i]={...cs[i],phone:e.target.value};setEditC(c=>({...c,contacts:cs}));}} style={{...INP,padding:"7px 10px",fontSize:13}}/></div>
+                  </div>
+                  <button onClick={()=>{const cs=[...(editC.contacts||[])];cs.splice(i,1);setEditC(c=>({...c,contacts:cs}));}} style={{...BTN("#1a0505","#fca5a5"),width:"100%",padding:"5px",fontSize:12}}>🗑</button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={()=>setEditC(null)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={()=>{setClients(cs=>cs.map(c=>c.id===editC.id?editC:c));setEditC(null);}} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Guardar</button>
+          </div>
+        </Modal>
+      )}
+
+      {editD&&(
+        <Modal onClose={()=>setEditD(null)} title={`✏️ ${editD.name}`}>
+          <div style={{display:"grid",gap:12}}>
+            {[{k:"name",l:"Nombre"},{k:"breed",l:"Raza"},{k:"notes",l:"Notas / comportamiento"}].map(f=>(
+              <div key={f.k}><label style={LBL}>{f.l}</label><input value={editD[f.k]||""} onChange={e=>setEditD(d=>({...d,[f.k]:e.target.value}))} style={INP}/></div>
+            ))}
+            <ScheduleEditor schedule={editD.schedule} onChange={s=>setEditD(d=>({...d,schedule:s}))}/>
+            <PriceEditor prices={editD.prices} unitPrice={editD.unitPrice||0} onChange={p=>setEditD(d=>({...d,prices:p}))} onChangeUnit={v=>setEditD(d=>({...d,unitPrice:v}))}/>
+            <EmergencyEditor dog={editD} onChange={d=>setEditD(d)}/>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={()=>setEditD(null)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={saveEditDog} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Guardar</button>
+          </div>
+        </Modal>
+      )}
+
+      {addD&&(
+        <Modal onClose={()=>setAddD(false)} title={`🐕 Nuevo perro · ${cl?.name}`}>
+          <div style={{display:"grid",gap:12}}>
+            {[{k:"name",l:"Nombre *",p:"Max"},{k:"breed",l:"Raza",p:"Labrador"},{k:"notes",l:"Notas",p:"Comportamiento..."}].map(f=>(
+              <div key={f.k}><label style={LBL}>{f.l}</label><input value={nDog[f.k]} onChange={e=>setNDog(d=>({...d,[f.k]:e.target.value}))} placeholder={f.p} style={INP}/></div>
+            ))}
+            <ScheduleEditor schedule={nDog.schedule} onChange={s=>setNDog(d=>({...d,schedule:s}))}/>
+            <PriceEditor prices={nDog.prices} unitPrice={nDog.unitPrice||0} onChange={p=>setNDog(d=>({...d,prices:p}))} onChangeUnit={v=>setNDog(d=>({...d,unitPrice:v}))}/>
+            <EmergencyEditor dog={nDog} onChange={d=>setNDog(d)}/>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={()=>setAddD(false)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={()=>doAddDog(sel)} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Añadir</button>
+          </div>
+        </Modal>
+      )}
+
+      {delC&&<Confirm icon="🗑" title={`¿Eliminar a ${cl?.name}?`} sub="Se eliminan todos sus perros y paseos." onConfirm={()=>doDelClient(sel)} onCancel={()=>setDelC(false)} danger/>}
+      {delD&&<Confirm icon="🗑" title={`¿Eliminar a ${dogs.find(d=>d.id===delD)?.name}?`} sub="Se eliminan sus paseos también." onConfirm={()=>doDelDog(delD)} onCancel={()=>setDelD(null)} danger/>}
+    </div>
+  );
+}
+
+// ── RESUMEN ───────────────────────────────────────────────────────────────────
+function Resumen({paseos,dogs,clients,selWeek,onChangeWeek,selMes,onChangeMes,seccion,onChangeSeccion}){
+  const TODAY=getToday();
+  const wr=weekRange(selWeek);
+  const wp=paseos.filter(p=>p.fecha>=wr.from&&p.fecha<=wr.to);
+  const wReal=wp.filter(p=>p.status==="completado");
+  const wCxlCli=wp.filter(p=>p.status==="cancelado"&&p.cancelBy==="client");
+  const wCxlYo=wp.filter(p=>p.status==="cancelado"&&p.cancelBy==="me");
+  const wProg=wp.filter(p=>p.status==="programado");
+  const isCurW=wr.from===weekRange(TODAY).from;
+
+  const ingresoSemana=useMemo(()=>{ let t=0; dogs.forEach(dog=>{const dp=wp.filter(p=>p.dogId===dog.id);if(dp.length)t+=calcCobro(dp,dog).cobro;}); return t; },[wp,dogs]);
+  const ingresoPotencial=useMemo(()=>{ if(!wp.some(p=>p.status!=="programado")) return 0; let t=0; dogs.forEach(dog=>{if(!wp.some(p=>p.dogId===dog.id)||!dog.schedule.length) return; t+=dog.unitPrice>0?dog.unitPrice*dog.schedule.length:priceFor(dog.schedule.length,dog.prices);}); return t; },[dogs,wp]);
+
+  const mp=paseos.filter(p=>p.fecha.startsWith(selMes));
+  const mReal=mp.filter(p=>p.status==="completado");
+  const mCxlCli=mp.filter(p=>p.status==="cancelado"&&p.cancelBy==="client");
+  const mCxlYo=mp.filter(p=>p.status==="cancelado"&&p.cancelBy==="me");
+  const isCurM=selMes===TODAY.slice(0,7);
+  const ingresoMes=useMemo(()=>{ let t=0; dogs.forEach(dog=>{const dp=mp.filter(p=>p.dogId===dog.id);if(!dp.length) return; const bw={}; dp.forEach(p=>{const k=weekRange(p.fecha).from;if(!bw[k])bw[k]=[];bw[k].push(p);}); Object.values(bw).forEach(sp=>{t+=calcCobro(sp,dog).cobro;}); }); return t; },[mp,dogs]);
+
+  const semanasDelMes=useMemo(()=>{ const [y,m]=selMes.split("-").map(Number),seen=new Set(),res=[]; for(let d=1;d<=31;d++){const f=`${y}-${pad2(m)}-${pad2(d)}`;if(!f.startsWith(selMes))break;const w=weekRange(f);if(!seen.has(w.from)){seen.add(w.from);res.push(w);}} return res; },[selMes]);
+
+  const clienteStats=useMemo(()=>clients.map(cl=>{
+    const cd=dogs.filter(d=>d.clientId===cl.id), cp=paseos.filter(p=>cd.some(d=>d.id===p.dogId));
+    const realizados=cp.filter(p=>p.status==="completado").length, cxlCli=cp.filter(p=>p.status==="cancelado"&&p.cancelBy==="client").length;
+    const cobrado=cp.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0);
+    let deuda=0;
+    cd.forEach(dog=>{ const dp=cp.filter(p=>p.dogId===dog.id); if(dog.unitPrice>0){dp.filter(p=>p.status==="completado"&&!p.paid).forEach(p=>{deuda+=p.price-(p.paidAmount||0);});}
+    else{const bw={};dp.forEach(p=>{const k=weekRange(p.fecha).from;if(!bw[k])bw[k]=[];bw[k].push(p);});Object.values(bw).forEach(sp=>{if(!sp.some(p=>p.status==="completado"&&!p.paid))return;const c=calcCobroPaquete(sp,dog);const ab=sp.filter(p=>p.status==="completado"&&!p.paid).reduce((s,p)=>s+(p.paidAmount||0),0);deuda+=Math.max(c.cobro-ab,0);});}});
+    return {cl,cd,realizados,cxlCli,cobrado,deuda};
+  }).filter(x=>x.cd.length>0).sort((a,b)=>b.cobrado-a.cobrado),[clients,dogs,paseos]);
+
+  const perroStats=useMemo(()=>dogs.map(dog=>{ const dp=paseos.filter(p=>p.dogId===dog.id), cl=clients.find(c=>c.id===dog.clientId); return {dog,cl,realizados:dp.filter(p=>p.status==="completado").length,cxlCli:dp.filter(p=>p.status==="cancelado"&&p.cancelBy==="client").length,cobrado:dp.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0)}; }).filter(x=>x.dog.schedule.length>0).sort((a,b)=>b.cobrado-a.cobrado),[dogs,clients,paseos]);
+
+  const SECS=[{id:"semana",label:"Semana",icon:"📅"},{id:"mes",label:"Mes",icon:"📆"},{id:"clientes",label:"Clientes",icon:"👤"},{id:"perros",label:"Perros",icon:"🐕"}];
+  const NavBar=({label,onPrev,onNext,isCurrent})=>(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,...CARD,padding:"10px 14px"}}>
+      <button onClick={onPrev} style={{...BTN(C.cardLight,C.green),padding:"5px 12px",fontSize:18}}>‹</button>
+      <div style={{textAlign:"center"}}><div style={{fontWeight:800,fontSize:14,color:C.text}}>{label}</div>{isCurrent&&<div style={{fontSize:11,color:C.green}}>← actual</div>}</div>
+      <button onClick={onNext} style={{...BTN(C.cardLight,C.green),padding:"5px 12px",fontSize:18}}>›</button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{fontWeight:800,fontSize:18,color:C.text,marginBottom:14}}>📊 Resúmenes</div>
+      <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
+        {SECS.map(s=>(
+          <button key={s.id} onClick={()=>onChangeSeccion(s.id)}
+            style={{flexShrink:0,padding:"7px 14px",borderRadius:20,border:`1px solid ${seccion===s.id?C.green:C.border}`,cursor:"pointer",
+              background:seccion===s.id?C.green+"22":"transparent",color:seccion===s.id?C.green:C.textMuted,fontSize:13,fontWeight:seccion===s.id?700:400}}>
+            {s.icon} {s.label}
+          </button>
+        ))}
+      </div>
+
+      {seccion==="semana"&&(
+        <div>
+          <NavBar label={`${wr.from.slice(5)} → ${wr.to.slice(5)}`} onPrev={()=>onChangeWeek(addWeeks(selWeek,-1))} onNext={()=>onChangeWeek(addWeeks(selWeek,1))} isCurrent={isCurW}/>
+          <div style={{background:"#14532d",borderRadius:16,padding:18,marginBottom:12,border:"1px solid #166534"}}>
+            <div style={{fontSize:12,color:C.green,opacity:.8,marginBottom:4}}>Ingreso de la semana</div>
+            <div style={{fontSize:32,fontWeight:800,color:C.green}}>{ars(ingresoSemana)}</div>
+            {ingresoPotencial>0&&(<>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:12,borderTop:`1px solid ${C.green}44`,paddingTop:12}}>
+                <div><div style={{fontSize:11,color:C.green,opacity:.7}}>Potencial</div><div style={{fontSize:16,fontWeight:700,color:C.text}}>{ars(ingresoPotencial)}</div></div>
+                <div style={{textAlign:"right"}}><div style={{fontSize:11,color:C.red,opacity:.7}}>Perdido</div><div style={{fontSize:16,fontWeight:700,color:C.red}}>{ars(Math.max(ingresoPotencial-ingresoSemana,0))}</div></div>
+              </div>
+              <div style={{marginTop:10}}><div style={{background:"rgba(255,255,255,.1)",borderRadius:20,height:5,overflow:"hidden"}}><div style={{height:"100%",background:C.green,borderRadius:20,width:`${Math.min((ingresoSemana/ingresoPotencial)*100,100)}%`}}/></div></div>
+            </>)}
+          </div>
+          <div style={{display:"flex",gap:8,marginBottom:12}}>
+            {[{icon:"✅",label:"Realizados",v:wReal.length,c:C.green},{icon:"😔",label:"Cxl cliente",v:wCxlCli.length,c:C.red},{icon:"🙋",label:"Cxl yo",v:wCxlYo.length,c:C.blue}].map(s=>(
+              <div key={s.label} style={{...CARD,flex:1,textAlign:"center",padding:"12px 6px",marginBottom:0}}>
+                <div style={{fontSize:18}}>{s.icon}</div>
+                <div style={{fontSize:22,fontWeight:800,color:s.c}}>{s.v}</div>
+                <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {isCurW&&wProg.length>0&&<div style={{background:"#1a1200",borderRadius:12,padding:12,marginBottom:12,border:"1px solid #4a3a00"}}><div style={{fontWeight:700,fontSize:13,color:C.amber,marginBottom:6}}>⏳ {wProg.length} pendiente{wProg.length!==1?"s":""}</div>{wProg.map(p=>{const dog=dogs.find(d=>d.id===p.dogId);return <div key={p.id} style={{fontSize:12,color:C.textMuted}}>· {dog?.name} — {p.fecha}</div>;})}</div>}
+          <div style={CARD}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:10}}>Desglose por perro</div>
+            {!dogs.filter(dog=>wp.some(p=>p.dogId===dog.id)).length&&<div style={{textAlign:"center",padding:16,color:C.textMuted,fontSize:13}}>Sin paseos esta semana</div>}
+            {dogs.filter(dog=>wp.some(p=>p.dogId===dog.id)).map(dog=>{
+              const dp=wp.filter(p=>p.dogId===dog.id), c=calcCobro(dp,dog), cl=clients.find(x=>x.id===dog.clientId);
+              return (
+                <div key={dog.id} style={{display:"flex",alignItems:"center",gap:10,paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${C.border}`}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:dog.color,flexShrink:0}}/>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:13,color:C.text}}>{dog.name} <span style={{color:C.textMuted,fontSize:11}}>— {cl?.name}</span></div>
+                    <div style={{fontSize:11,color:C.textMuted}}>✅{c.realizados}{c.cxlCliente>0?` 😔${c.cxlCliente}`:""}{c.cxlYo>0?` 🙋${c.cxlYo}`:""}</div>
+                  </div>
+                  <div style={{fontWeight:800,color:C.green,fontSize:14}}>{ars(c.cobro)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {seccion==="mes"&&(
+        <div>
+          <NavBar label={`${MONTHS_ES[parseInt(selMes.split("-")[1])-1]} ${selMes.split("-")[0]}`} onPrev={()=>onChangeMes(addMonths(selMes,-1))} onNext={()=>onChangeMes(addMonths(selMes,1))} isCurrent={isCurM}/>
+          <div style={{background:"#1e3a5f",borderRadius:16,padding:18,marginBottom:12,border:"1px solid #1d4ed8"}}>
+            <div style={{fontSize:12,color:C.blue,opacity:.8,marginBottom:4}}>Ingreso del mes</div>
+            <div style={{fontSize:32,fontWeight:800,color:C.text}}>{ars(ingresoMes)}</div>
+            <div style={{display:"flex",gap:20,marginTop:12,borderTop:`1px solid ${C.blue}44`,paddingTop:12}}>
+              {[{l:"Realizados",v:mReal.length,c:C.green},{l:"Cxl cliente",v:mCxlCli.length,c:"#fca5a5"},{l:"Cxl yo",v:mCxlYo.length,c:"#93c5fd"}].map(s=>(
+                <div key={s.l}><div style={{fontSize:11,color:C.textMuted}}>{s.l}</div><div style={{fontSize:20,fontWeight:800,color:s.c}}>{s.v}</div></div>
+              ))}
+            </div>
+          </div>
+          <div style={CARD}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:10}}>Semana a semana</div>
+            {semanasDelMes.map(wr2=>{
+              let ing=0; dogs.forEach(dog=>{const dp=paseos.filter(p=>p.dogId===dog.id&&p.fecha>=wr2.from&&p.fecha<=wr2.to);if(dp.length)ing+=calcCobro(dp,dog).cobro;});
+              const real=paseos.filter(p=>p.fecha>=wr2.from&&p.fecha<=wr2.to&&p.status==="completado").length;
+              const cxlC=paseos.filter(p=>p.fecha>=wr2.from&&p.fecha<=wr2.to&&p.status==="cancelado"&&p.cancelBy==="client").length;
+              const isCurr=wr2.from===weekRange(TODAY).from, isFut=wr2.from>weekRange(TODAY).from;
+              return (
+                <div key={wr2.from} onClick={()=>{onChangeWeek(wr2.from);onChangeSeccion("semana");}}
+                  style={{display:"flex",alignItems:"center",gap:10,paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${C.border}`,opacity:isFut?.4:1,cursor:"pointer"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:isCurr?800:600,fontSize:13,color:isCurr?C.green:C.text}}>{wr2.from.slice(5)} → {wr2.to.slice(5)}{isCurr?" ← actual":""}</div>
+                    <div style={{fontSize:11,color:C.textMuted}}>✅{real}{cxlC>0?` 😔${cxlC}`:""}</div>
+                  </div>
+                  <div style={{fontWeight:800,fontSize:14,color:isCurr?C.green:C.text}}>{ars(ing)}</div>
+                  <span style={{color:C.textMuted}}>›</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {seccion==="clientes"&&(
+        <div>
+          <div style={CARD}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:10}}>🏆 Ranking por ingresos</div>
+            {clienteStats.map((s,i)=>(
+              <div key={s.cl.id} style={{display:"flex",gap:10,paddingBottom:12,marginBottom:12,borderBottom:i<clienteStats.length-1?`1px solid ${C.border}`:"none"}}>
+                <div style={{width:26,height:26,borderRadius:"50%",background:C.cardLight,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,flexShrink:0,color:C.text}}>{i===0?"🥇":i===1?"🥈":i===2?"🥉":i+1}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:C.text}}>{s.cl.name}</div>
+                  <div style={{fontSize:12,color:C.textMuted}}>{s.cd.map(d=>d.name).join(", ")} · {s.realizados} paseos</div>
+                  {s.deuda>0&&<Tag bg="#1a1200" color={C.amber}>💰 debe {ars(s.deuda)}</Tag>}
+                </div>
+                <div style={{textAlign:"right"}}><div style={{fontWeight:800,color:C.green,fontSize:15}}>{ars(s.cobrado)}</div><div style={{fontSize:10,color:C.textMuted}}>cobrado</div></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {seccion==="perros"&&(
+        <div>
+          <div style={CARD}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:10}}>🐕 Todos los perros</div>
+            {perroStats.map((s,i)=>(
+              <div key={s.dog.id} style={{display:"flex",alignItems:"center",gap:10,paddingBottom:10,marginBottom:10,borderBottom:i<perroStats.length-1?`1px solid ${C.border}`:"none"}}>
+                <div style={{width:32,height:32,borderRadius:"50%",background:s.dog.color+"22",border:`2px solid ${s.dog.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>🐕</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:C.text}}>{s.dog.name} <span style={{color:C.textMuted,fontSize:11}}>— {s.cl?.name}</span></div>
+                  <div style={{fontSize:11,color:C.textMuted}}>{s.dog.schedule.length}d/sem · ✅{s.realizados}{s.cxlCli>0?` 😔${s.cxlCli}`:""}</div>
+                </div>
+                <div style={{fontWeight:800,color:C.green,fontSize:14}}>{ars(s.cobrado)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── APP ───────────────────────────────────────────────────────────────────────
+function App(){
+  const TODAY=getToday();
+  const [dogs,setDogs]        = usePersisted("pc_dogs",    INIT_DOGS);
+  const [clients,setClients]  = usePersisted("pc_clients", INIT_CLIENTS);
+  const [routes,setRoutes]    = usePersisted("pc_routes",  INIT_ROUTES);
+  const [global,setGlobal]    = usePersisted("pc_global",  {origin:"",destination:""});
+  // Paseos: nunca null. Si localStorage no tiene nada, genera desde los perros.
+  const [paseos,setPaseos]    = usePersisted("pc_paseos", ()=>initPaseos(loadLS("pc_dogs",INIT_DOGS)));
+
+  const realPaseos = Array.isArray(paseos) ? paseos : initPaseos(dogs);
+
+  const [tab,setTab]=useState("agenda");
+  const [addWalk,setAddWalk]=useState(null);
+  const [addClient,setAddClient]=useState(false);
+  const [nClient,setNClient]=useState({name:"",phone:"",address:"",contacts:[]});
+  const [nWalk,setNWalk]=useState({dogId:"",fecha:TODAY});
+  const [resSelWeek,setResSelWeek]=useState(weekRange(TODAY).from);
+  const [resSelMes,setResSelMes]=useState(TODAY.slice(0,7));
+  const [resSeccion,setResSeccion]=useState("semana");
+
+  const week=weekRange(TODAY);
+  const totalCobrado=useMemo(()=>realPaseos.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0),[realPaseos]);
+  const weekPending=useMemo(()=>{ let t=0; dogs.forEach(dog=>{const wp=realPaseos.filter(p=>p.dogId===dog.id&&p.fecha>=week.from&&p.fecha<=week.to); const unpaid=wp.filter(p=>p.status==="completado"&&!p.paid); if(!unpaid.length) return; const c=calcCobro(wp,dog); const ab=unpaid.reduce((s,p)=>s+(p.paidAmount||0),0); t+=Math.max(c.cobro-ab,0);}); return t; },[realPaseos,dogs]);
+  const hoyCount=useMemo(()=>{ const ids=new Set(); realPaseos.filter(p=>p.fecha===TODAY&&p.status!=="cancelado").forEach(p=>ids.add(p.dogId)); return ids.size; },[realPaseos,TODAY]);
+
+  const fechaHoy=useMemo(()=>{ const f=new Date(TODAY+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}); return f.charAt(0).toUpperCase()+f.slice(1); },[TODAY]);
+
+  const getDog=id=>dogs.find(d=>d.id===id);
+  const doAddClient=()=>{ if(!nClient.name) return; setClients(cs=>[...cs,{...nClient,id:Date.now()}]); setNClient({name:"",phone:"",address:"",contacts:[]}); setAddClient(false); };
+  const doAddWalk=()=>{ if(!nWalk.dogId||!nWalk.fecha) return; const dog=getDog(parseInt(nWalk.dogId)); const freq=dog?.schedule?.length||0; const price=dog?.unitPrice>0?dog.unitPrice:priceFor(freq,dog?.prices); setPaseos(ps=>[...ps,{id:Date.now(),dogId:parseInt(nWalk.dogId),clientId:dog?.clientId,fecha:nWalk.fecha,status:"programado",cancelBy:null,paid:false,paidAmount:0,freq,price,manual:true}]); setNWalk({dogId:"",fecha:TODAY}); setAddWalk(null); };
+
+  const [showBackup,setShowBackup]=useState(false);
+  const [importTxt,setImportTxt]=useState("");
+  const [importErr,setImportErr]=useState("");
+  const [importOk,setImportOk]=useState(false);
+
+  const doExport=()=>{
+    const data={v:1,ts:new Date().toISOString(),dogs,clients,routes,global:global,paseos:realPaseos};
+    const json=JSON.stringify(data,null,2);
+    const blob=new Blob([json],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`PaseoCan-backup-${getToday()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const doImport=()=>{
+    setImportErr(""); setImportOk(false);
+    try{
+      const data=JSON.parse(importTxt);
+      if(!data.dogs||!data.clients||!data.paseos) throw new Error("Archivo inválido");
+      if(data.dogs) setDogs(data.dogs);
+      if(data.clients) setClients(data.clients);
+      if(data.routes) setRoutes(data.routes);
+      if(data.global) setGlobal(data.global);
+      if(data.paseos) setPaseos(data.paseos);
+      setImportOk(true);
+      setImportTxt("");
+      setTimeout(()=>{setShowBackup(false);setImportOk(false);},1500);
+    }catch(e){ setImportErr("El archivo no es válido. Pegá el contenido del JSON."); }
+  };
+
+  const doImportFile=(e)=>{
+    const file=e.target.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=ev=>{ setImportTxt(ev.target.result); };
+    reader.readAsText(file);
+  };
+
+  const TABS=[{id:"agenda",icon:"📅",label:"Agenda"},{id:"clientes",icon:"🐕",label:"Clientes"},{id:"rutas",icon:"🗺",label:"Rutas"},{id:"cobros",icon:"💳",label:"Cobros"},{id:"resumen",icon:"📊",label:"Resumen"}];
+
+  return (
+    <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:C.bg,minHeight:"100vh",maxWidth:480,margin:"0 auto",color:C.text}}>
+      {/* Header */}
+      <div style={{background:"linear-gradient(160deg,#052e16,#14532d,#166534)",padding:"22px 18px 16px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:22,fontWeight:800,color:C.text,letterSpacing:"-0.02em"}}>🐾 PaseoCan</div>
+              <button onClick={()=>setShowBackup(true)} style={{background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",borderRadius:8,padding:"4px 8px",fontSize:12,color:C.textMuted,cursor:"pointer",fontWeight:600}}>💾</button>
+            </div>
+            <div style={{fontSize:12,color:C.textMuted,marginTop:2}}>{fechaHoy}</div>
+          </div>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:10,color:C.textMuted}}>Cobrado total</div>
+            <div style={{fontSize:18,fontWeight:800,color:C.green}}>{ars(totalCobrado)}</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          {[{l:"Hoy",v:hoyCount,i:"🦮"},{l:"Clientes",v:clients.length,i:"👤"},{l:"Esta sem.",v:ars(weekPending),i:"💰"}].map(s=>(
+            <div key={s.l} style={{flex:1,background:"rgba(255,255,255,.07)",borderRadius:12,padding:"10px 6px",textAlign:"center",border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:18}}>{s.i}</div>
+              <div style={{fontSize:s.l==="Esta sem."?11:18,fontWeight:800,color:C.text,lineHeight:1.2}}>{s.v}</div>
+              <div style={{fontSize:10,color:C.textMuted,marginTop:2}}>{s.l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",background:C.card,borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,zIndex:10}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)}
+            style={{flex:1,padding:"10px 2px 8px",border:"none",background:"none",cursor:"pointer",
+              fontSize:9,fontWeight:tab===t.id?800:500,color:tab===t.id?C.green:C.textMuted,
+              borderBottom:`2px solid ${tab===t.id?C.green:"transparent"}`,
+              display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"color .15s"}}>
+            <span style={{fontSize:17}}>{t.icon}</span>{t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Contenido */}
+      <div style={{padding:16}}>
+        {tab==="agenda"   &&<Agenda    paseos={realPaseos} setPaseos={setPaseos} dogs={dogs} setDogs={setDogs} clients={clients} onAdd={f=>{setNWalk(w=>({...w,fecha:f}));setAddWalk(f);}}/>}
+        {tab==="clientes" &&<Clientes  dogs={dogs} setDogs={setDogs} clients={clients} setClients={setClients} paseos={realPaseos} setPaseos={setPaseos} onAdd={()=>setAddClient(true)}/>}
+        {tab==="rutas"    &&<Rutas     routes={routes} setRoutes={setRoutes} dogs={dogs} clients={clients} paseos={realPaseos} globalRoute={global} setGlobalRoute={setGlobal}/>}
+        {tab==="cobros"   &&<Cobros    paseos={realPaseos} setPaseos={setPaseos} dogs={dogs} clients={clients}/>}
+        {tab==="resumen"  &&<Resumen   paseos={realPaseos} dogs={dogs} clients={clients} selWeek={resSelWeek} onChangeWeek={setResSelWeek} selMes={resSelMes} onChangeMes={setResSelMes} seccion={resSeccion} onChangeSeccion={setResSeccion}/>}
+      </div>
+
+      {/* Modal nuevo cliente */}
+      {addClient&&(
+        <Modal onClose={()=>setAddClient(false)} title="👤 Nuevo cliente">
+          <div style={{display:"grid",gap:12}}>
+            <div><label style={LBL}>Nombre *</label><input value={nClient.name} onChange={e=>setNClient(c=>({...c,name:e.target.value}))} placeholder="María García" style={INP}/></div>
+            <div><label style={LBL}>WhatsApp</label><input value={nClient.phone} onChange={e=>setNClient(c=>({...c,phone:e.target.value}))} placeholder="5491112345678" style={INP}/></div>
+            <div><label style={LBL}>Dirección</label><input value={nClient.address} onChange={e=>setNClient(c=>({...c,address:e.target.value}))} placeholder="Av. Corrientes 1234" style={INP}/>
+              {nClient.address&&<a href={gMaps(nClient.address)} target="_blank" rel="noreferrer" style={{display:"block",marginTop:6,background:C.green+"22",color:C.green,borderRadius:8,padding:"7px",fontSize:13,fontWeight:700,textDecoration:"none",textAlign:"center"}}>🗺 Verificar</a>}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={()=>setAddClient(false)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={doAddClient} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Crear cliente</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal nuevo paseo */}
+      {addWalk&&(
+        <Modal onClose={()=>setAddWalk(null)} title="🦮 Nuevo paseo">
+          <div style={{display:"grid",gap:12}}>
+            <div><label style={LBL}>Perro *</label>
+              <select value={nWalk.dogId} onChange={e=>setNWalk(w=>({...w,dogId:e.target.value}))} style={INP}>
+                <option value="">Seleccionar perro</option>
+                {dogs.map(d=>{const cl=clients.find(c=>c.id===d.clientId);return <option key={d.id} value={d.id}>{d.name} — {cl?.name}</option>;})}
+              </select>
+            </div>
+            <div><label style={LBL}>Fecha</label><input type="date" value={nWalk.fecha} onChange={e=>setNWalk(w=>({...w,fecha:e.target.value}))} style={INP}/></div>
+            {nWalk.dogId&&(()=>{ const dog=getDog(parseInt(nWalk.dogId)); const price=dog?.unitPrice>0?dog.unitPrice:priceFor(dog?.schedule?.length||0,dog?.prices); return <div style={{background:C.green+"22",borderRadius:8,padding:"10px 12px",fontSize:13,color:C.green,fontWeight:600}}>💰 {ars(price)}/paseo</div>; })()}
+          </div>
+          <div style={{display:"flex",gap:8,marginTop:16}}>
+            <button onClick={()=>setAddWalk(null)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
+            <button onClick={doAddWalk} style={{...BTN(C.green,"#0f1a14"),flex:2}}>Añadir</button>
+          </div>
+        </Modal>
+      )}
+      {/* Modal backup */}
+      {showBackup&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",zIndex:500,display:"flex",alignItems:"flex-start",overflowY:"auto"}} onClick={()=>{setShowBackup(false);setImportErr("");setImportOk(false);}}>
+          <div style={{background:C.card,borderRadius:"0 0 24px 24px",padding:24,width:"100%",maxWidth:480,margin:"0 auto",boxSizing:"border-box",border:`1px solid ${C.border}`,borderTop:"none"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontWeight:800,fontSize:18,color:C.text,marginBottom:4}}>💾 Backup de datos</div>
+            <div style={{fontSize:13,color:C.textMuted,marginBottom:20}}>Guardá una copia o restaurá desde un backup anterior.</div>
+
+            <div style={{background:C.cardLight,borderRadius:14,padding:16,marginBottom:14,border:`1px solid ${C.border}`}}>
+              <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:4}}>📤 Exportar</div>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:10}}>Descarga un archivo JSON con todos tus datos: clientes, perros, paseos y cobros.</div>
+              <button onClick={doExport} style={{background:C.green,color:"#0f1a14",border:"none",borderRadius:12,padding:"11px 16px",fontSize:14,fontWeight:800,cursor:"pointer",width:"100%"}}>⬇️ Descargar backup</button>
+            </div>
+
+            <div style={{background:C.cardLight,borderRadius:14,padding:16,marginBottom:14,border:`1px solid ${C.border}`}}>
+              <div style={{fontWeight:700,fontSize:14,color:C.text,marginBottom:4}}>📥 Importar</div>
+              <div style={{fontSize:12,color:C.textMuted,marginBottom:10}}>Restaurá desde un backup. <b style={{color:C.red}}>Reemplaza todos los datos actuales.</b></div>
+              <label style={{display:"block",background:C.cardLight,border:`1.5px dashed ${C.border}`,borderRadius:10,padding:"12px",textAlign:"center",cursor:"pointer",marginBottom:10,fontSize:13,color:C.textMuted}}>
+                📁 Seleccionar archivo JSON
+                <input type="file" accept=".json,application/json" onChange={doImportFile} style={{display:"none"}}/>
+              </label>
+              {importTxt&&!importOk&&(
+                <div>
+                  <div style={{fontSize:12,color:C.green,marginBottom:8,fontWeight:600}}>✓ Archivo cargado. Tocá importar para confirmar.</div>
+                  <button onClick={doImport} style={{background:"#7f1d1d",color:"#fca5a5",border:"1px solid #4a1515",borderRadius:12,padding:"11px 16px",fontSize:14,fontWeight:800,cursor:"pointer",width:"100%"}}>⚠️ Importar y reemplazar datos</button>
+                </div>
+              )}
+              {importErr&&<div style={{fontSize:12,color:C.red,marginTop:8,fontWeight:600}}>❌ {importErr}</div>}
+              {importOk&&<div style={{fontSize:13,color:C.green,fontWeight:700,textAlign:"center",padding:10}}>✅ ¡Datos restaurados!</div>}
+            </div>
+
+            <div style={{background:"#1a1200",borderRadius:12,padding:12,marginBottom:16,border:"1px solid #4a3a00"}}>
+              <div style={{fontSize:12,color:C.amber,fontWeight:700,marginBottom:4}}>💡 Consejo</div>
+              <div style={{fontSize:12,color:C.textMuted}}>Hacé un backup cada semana y guardalo en Google Drive o mandátelo por WhatsApp. Así nunca perdés nada.</div>
+            </div>
+
+            <button onClick={()=>{setShowBackup(false);setImportErr("");setImportOk(false);}} style={{background:C.cardLight,color:C.textMuted,border:"none",borderRadius:12,padding:"11px",fontSize:14,fontWeight:700,cursor:"pointer",width:"100%"}}>Cerrar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+
+  </script>
+
+  <!-- Service Worker para offline -->
+  <script>
+    if('serviceWorker' in navigator){
+      window.addEventListener('load', ()=>{
+        // SW inline como blob
+        const swCode = `
+          const CACHE = 'paseocan-v1';
+          self.addEventListener('install', e => {
+            e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/'])));
+          });
+          self.addEventListener('fetch', e => {
+            e.respondWith(
+              caches.match(e.request).then(r => r || fetch(e.request).catch(()=>new Response('Offline')))
+            );
+          });
+        `;
+        const blob = new Blob([swCode], {type:'application/javascript'});
+        const swUrl = URL.createObjectURL(blob);
+        navigator.serviceWorker.register(swUrl).catch(()=>{});
+      });
+    }
+  </script>
+</body>
+</html>
