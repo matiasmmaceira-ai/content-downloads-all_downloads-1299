@@ -77,10 +77,24 @@ function calcCobroPaquete(ps,dog){
   const r=ps.filter(p=>p.status==="completado").length;
   const cc=ps.filter(p=>p.status==="cancelado"&&p.cancelBy==="client").length;
   const cy=ps.filter(p=>p.status==="cancelado"&&p.cancelBy==="me").length;
-  const pc=(dog.schedule||[]).length, pr=Math.max(pc-cc,0);
-  if(!pr) return {modo:"paquete",realizados:r,cxlCliente:cc,cxlYo:cy,packContratado:pc,packResultante:0,semanaContratada:priceFor(pc,dog.prices),semanaResultante:0,precioUnitCont:unitPriceFor(pc,dog.prices),precioReal:0,precioCont:unitPriceFor(pc,dog.prices),descuentoCxlYo:0,cobro:0};
-  const sc=priceFor(pc,dog.prices),sr=priceFor(pr,dog.prices),pu=unitPriceFor(pc,dog.prices),desc=cy*pu,cobro=Math.max(sr-desc,0);
-  return {modo:"paquete",realizados:r,cxlCliente:cc,cxlYo:cy,packContratado:pc,packResultante:pr,semanaContratada:sc,semanaResultante:sr,precioUnitCont:pu,precioReal:pu,precioCont:pu,descuentoCxlYo:desc,cobro};
+  const pc=(dog.schedule||[]).length;           // pack contratado (define precio unitario)
+  const pu=unitPriceFor(pc,dog.prices);         // precio unitario del pack contratado
+
+  // Pack acumulado = realizados + mis cancelaciones (ambos "consumen" un slot)
+  // cxlCliente NO mueve el pack
+  // Si no hubo ningún paseo realizado, cobro = 0 siempre
+  if(r===0) return {modo:"paquete",realizados:0,cxlCliente:cc,cxlYo:cy,packContratado:pc,packAcumulado:0,precioUnitCont:pu,descuentoCxlYo:0,cobro:0};
+  const packAcumulado=Math.min(r+cy, 5);        // máximo 5
+
+  if(packAcumulado===0) return {modo:"paquete",realizados:r,cxlCliente:cc,cxlYo:cy,
+    packContratado:pc,packAcumulado:0,precioUnitCont:pu,descuentoCxlYo:0,cobro:0};
+
+  const precioAcumulado=priceFor(packAcumulado,dog.prices);  // precio del pack acumulado
+  const descuentoCxlYo=cy*pu;                               // descuento por mis cancelaciones
+  const cobro=Math.max(precioAcumulado-descuentoCxlYo,0);
+
+  return {modo:"paquete",realizados:r,cxlCliente:cc,cxlYo:cy,
+    packContratado:pc,packAcumulado,precioAcumulado,precioUnitCont:pu,descuentoCxlYo,cobro};
 }
 function calcCobro(ps,dog){ return dog.unitPrice>0?calcCobroUnitario(ps,dog):calcCobroPaquete(ps,dog); }
 
@@ -131,27 +145,8 @@ function usePersisted(key,fb){
 }
 
 // ── Datos iniciales ───────────────────────────────────────────────────────────
-const INIT_CLIENTS=[
-  {id:101,name:"Natalia",phone:"5491100000001",address:"33 Orientales 822",contacts:[]},
-  {id:102,name:"Athina", phone:"5491100000002",address:"Senillosa 1015",contacts:[]},
-  {id:103,name:"Alicia", phone:"5491100000003",address:"Av. La Plata 826 7A",contacts:[]},
-  {id:104,name:"Jose",   phone:"5491100000004",address:"Muñiz 551 6A",contacts:[]},
-  {id:105,name:"Mari",   phone:"5491100000005",address:"Viel 472 8B",contacts:[]},
-  {id:106,name:"Diego",  phone:"5491100000006",address:"Viel 984 1A",contacts:[]},
-  {id:107,name:"Vale",   phone:"5491100000007",address:"Av. Independencia 4120 11B",contacts:[]},
-  {id:108,name:"Flor",   phone:"5491100000008",address:"Av. Juan B. Alberdi 35 6-17",contacts:[]},
-];
-const INIT_DOGS=[
-  {id:1,clientId:101,name:"Billi",  color:"#f59e0b",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,3,5]},
-  {id:2,clientId:102,name:"Romeo",  color:"#10b981",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
-  {id:3,clientId:103,name:"Bartolo",color:"#8b5cf6",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
-  {id:4,clientId:104,name:"Canela", color:"#f97316",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
-  {id:5,clientId:105,name:"Gucci",  color:"#ec4899",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[2,4]},
-  {id:6,clientId:106,name:"Lara",   color:"#3b82f6",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
-  {id:7,clientId:106,name:"Cody",   color:"#14b8a6",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,2,3,4,5]},
-  {id:8,clientId:107,name:"Fidel",  color:"#dc2626",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[3]},
-  {id:9,clientId:108,name:"Ciro",   color:"#7c3aed",breed:"",notes:"",vet:"",medication:"",emergencyContact:"",walkTime:"08:00",prices:[...DEFAULT_PRICES],unitPrice:0,cancellations:[],schedule:[1,3,5]},
-];
+const INIT_CLIENTS=[];
+const INIT_DOGS=[];
 const INIT_ROUTES=DAYS_ES.map((label,i)=>({id:i,dow:i,label,startTime:"08:00",origin:"",destination:"",stopOrder:[],legMins:[]}));
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -638,20 +633,53 @@ function Rutas({routes,setRoutes,dogs,clients,paseos,globalRoute,setGlobalRoute}
             {aStops.length>0&&(
               <div style={{background:C.cardLight,borderRadius:10,padding:12}}>
                 <div style={{fontSize:11,color:C.textMuted,marginBottom:10,fontWeight:700,letterSpacing:"0.05em"}}>MINUTOS ENTRE PUNTOS</div>
-                {[origin(draft)||"Partida",...aStops.map(d=>d.name)].map((name,i)=>{
+                {[...aStops.map((_,i)=>i)].concat([aStops.length]).map((i)=>{
+                  // Construir addresses explícitamente
+                  const fromAddr = i===0
+                    ? (draft.origin||globalRoute.origin||"")
+                    : (clients.find(c=>c.id===aStops[i-1]?.clientId)?.address||"");
+                  const toAddr = i<aStops.length
+                    ? (clients.find(c=>c.id===aStops[i]?.clientId)?.address||"")
+                    : (draft.destination||globalRoute.destination||"");
+                  const fromLabel = i===0
+                    ? (draft.origin||globalRoute.origin||"Partida")
+                    : (clients.find(c=>c.id===aStops[i-1]?.clientId)?.name||aStops[i-1]?.name||"");
+                  const toLabel = i<aStops.length
+                    ? (clients.find(c=>c.id===aStops[i]?.clientId)?.name||aStops[i]?.name||"")
+                    : "Destino";
+                  const name=i===0?"Partida":aStops[i-1]?.name;
                   const nextName=i<aStops.length?aStops[i]?.name:"Destino";
-                  const fa=i===0?(origin(draft)||""):(client(aStops[i-1]?.clientId)?.address||"");
-                  const ta=i<aStops.length?(client(aStops[i]?.clientId)?.address||""):(dest(draft)||"");
                   const cum=draft.legMins.slice(0,i+1).reduce((a,b)=>a+(b||0),0);
                   return (
-                    <div key={i} style={{marginBottom:10}}>
-                      <div style={{fontSize:12,color:C.textMuted,marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <span>{i===0?"Partida":name} → {nextName}</span>
-                        {fa&&ta&&<a href={g2(fa,ta)} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.blue,fontWeight:700,textDecoration:"none",background:C.blue+"22",borderRadius:6,padding:"2px 8px"}}>🗺</a>}
+                    <div key={i} style={{marginBottom:14,background:C.card,borderRadius:12,padding:12,border:`1px solid ${C.border}`}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:10}}>
+                        {i===0?"🟢 Partida":name} → {nextName}
+                      </div>
+                      <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
+                        {fromAddr&&toAddr?(
+                          <button onClick={()=>window.open(g2(fromAddr,toAddr),"_blank")}
+                            style={{flex:1,background:C.blue,border:"none",borderRadius:10,padding:"10px",color:"white",fontWeight:800,fontSize:14,cursor:"pointer",WebkitAppearance:"none"}}>
+                            🗺 Maps
+                          </button>
+                        ):(
+                          <div style={{flex:1,fontSize:11,color:C.amber,background:"#1a1200",borderRadius:8,padding:"8px 10px",border:"1px solid #4a3a00",textAlign:"center"}}>
+                            ⚠ Sin dirección
+                          </div>
+                        )}
+                        <div style={{fontSize:11,color:C.textMuted,flex:2,overflow:"hidden"}}>
+                          <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fromAddr||"—"}</div>
+                          <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",opacity:.7}}>{toAddr||"—"}</div>
+                        </div>
                       </div>
                       <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                        <input type="number" min="0" value={draft.legMins[i]||""} placeholder="min" onChange={e=>{const l=[...draft.legMins];l[i]=parseInt(e.target.value)||0;setDraft(d=>({...d,legMins:l}));}} style={{...INP,width:70,flex:"none"}}/>
-                        <span style={{fontSize:12,color:C.textMuted}}>→ <b style={{color:C.green}}>{addMin(draft.startTime,cum)}</b></span>
+                        <div style={{flex:1}}>
+                          <label style={{...LBL,fontSize:10}}>Minutos</label>
+                          <input type="number" min="0" value={draft.legMins[i]||""} placeholder="ej: 5" onChange={e=>{const l=[...draft.legMins];l[i]=parseInt(e.target.value)||0;setDraft(d=>({...d,legMins:l}));}} style={INP}/>
+                        </div>
+                        <div style={{textAlign:"center",paddingTop:18}}>
+                          <div style={{fontSize:11,color:C.textMuted}}>Llegada</div>
+                          <div style={{fontSize:18,fontWeight:800,color:C.green}}>{addMin(draft.startTime,cum)}</div>
+                        </div>
                       </div>
                     </div>
                   );
@@ -716,10 +744,26 @@ function Cobros({paseos,setPaseos,dogs,clients}){
   const totalCobrado=paseos.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0);
   const totalPend=byClient.reduce((s,{cl,base})=>s+Math.max(adjTotal(cl.id,base),0),0);
 
-  const doCollect=({ids,adjWalks,cid})=>{ setPaseos(ps=>ps.map(p=>{ if(!ids.includes(p.id)) return p; const adj=adjWalks.find(a=>a.id===p.id); return {...p,paid:true,paidAmount:adj?adj.price:p.price}; })); setAjustes(a=>({...a,[cid]:undefined})); setConfPay(null); };
-  const doPartial=({ids,adjWalks,cid,parcial})=>{
+  const doCollect=({ids,adjWalks,cid,amount,baseAmount})=>{
+    // Aplicar ajuste: distribuir diferencia en primer walk con precio > 0
+    const diff=(amount||0)-(baseAmount||amount||0);
+    const finalWalks=[...adjWalks];
+    if(diff!==0){
+      const fi=finalWalks.findIndex(w=>w.price>0);
+      if(fi!==-1) finalWalks[fi]={...finalWalks[fi],price:Math.max(finalWalks[fi].price+diff,0)};
+    }
+    setPaseos(ps=>ps.map(p=>{ if(!ids.includes(p.id)) return p; const adj=finalWalks.find(a=>a.id===p.id); return {...p,paid:true,paidAmount:adj!==undefined?adj.price:p.price}; }));
+    setAjustes(a=>({...a,[cid]:undefined})); setConfPay(null);
+  };
+  const doPartial=({ids,adjWalks,cid,parcial,amount,baseAmount})=>{
+    const diff=(amount||0)-(baseAmount||amount||0);
+    const finalWalks=[...adjWalks];
+    if(diff!==0){
+      const fi=finalWalks.findIndex(w=>w.price>0);
+      if(fi!==-1) finalWalks[fi]={...finalWalks[fi],price:Math.max(finalWalks[fi].price+diff,0)};
+    }
     let r=parcial;
-    setPaseos(ps=>ps.map(p=>{ if(!ids.includes(p.id)||r<=0) return p; const ae=adjWalks.find(a=>a.id===p.id); const pr=ae!==undefined?ae.price:p.price; const ya=p.paidAmount||0; const d=pr-ya; if(d<=0) return p; const ap=Math.min(r,d); r-=ap; const np=ya+ap; return {...p,paidAmount:np,paid:np>=pr}; }));
+    setPaseos(ps=>ps.map(p=>{ if(!ids.includes(p.id)||r<=0) return p; const ae=finalWalks.find(a=>a.id===p.id); const pr=ae!==undefined?ae.price:p.price; const ya=p.paidAmount||0; const d=pr-ya; if(d<=0) return p; const ap=Math.min(r,d); r-=ap; const np=ya+ap; return {...p,paidAmount:np,paid:np>=pr}; }));
     setAjustes(a=>({...a,[cid]:undefined})); setConfPay(null);
   };
 
@@ -768,7 +812,13 @@ function Cobros({paseos,setPaseos,dogs,clients}){
                     {calc.modo==="unitario"?(
                       <>{calc.realizados} × {ars(calc.precio)} = <span style={{color:C.green,fontWeight:700}}>{ars(calc.cobro)}</span></>
                     ):(
-                      <>Pack {calc.packContratado}d{calc.cxlCliente>0?` → baja a ${calc.packResultante}d`:""}{calc.cxlYo>0?` · -${ars(calc.descuentoCxlYo)}`:""} = <span style={{color:C.green,fontWeight:700}}>{ars(calc.cobro)}</span></>
+                      <div style={{fontSize:12,lineHeight:1.7}}>
+                        <div>Pack contratado: {calc.packContratado}d → {ars(unitPriceFor(calc.packContratado,dog.prices))}/paseo</div>
+                        <div>✅ {calc.realizados} realizado{calc.realizados!==1?"s":""}{calc.cxlYo>0?` · 🙋 ${calc.cxlYo} cancelé yo`:""} → pack acumulado {calc.packAcumulado} → {ars(calc.precioAcumulado)}</div>
+                        {calc.cxlCliente>0&&<div>😔 {calc.cxlCliente} canceló cliente → no mueve pack</div>}
+                        {calc.cxlYo>0&&<div>Descuento: {calc.cxlYo} × {ars(calc.precioUnitCont)} = -{ars(calc.descuentoCxlYo)}</div>}
+                        <div style={{fontWeight:700,color:C.green,marginTop:2}}>{ars(calc.precioAcumulado)}{calc.cxlYo>0?` − ${ars(calc.descuentoCxlYo)}`:""} = {ars(calc.cobro)}</div>
+                      </div>
                     )}
                   </div>
                 )}
@@ -792,17 +842,31 @@ function Cobros({paseos,setPaseos,dogs,clients}){
             {fin>0&&(
               <div style={{background:C.cardLight,borderRadius:10,padding:10,marginBottom:10}}>
                 <div style={{fontSize:11,color:C.textMuted,marginBottom:6,fontWeight:700,letterSpacing:"0.05em"}}>AJUSTE MANUAL</div>
-                <div style={{display:"flex",gap:6}}>
-                  <select value={aj.type} onChange={e=>setAjustes(a=>({...a,[cl.id]:{...aj,type:e.target.value,val:0}}))} style={{...INP,width:100,flex:"none",padding:"8px 10px"}}>
-                    <option value="pesos">+ / - $</option><option value="pct">% desc.</option>
-                  </select>
-                  <input type="number" value={aj.val||""} placeholder={aj.type==="pct"?"10":"-5000"} onChange={e=>setAjustes(a=>({...a,[cl.id]:{...aj,val:parseFloat(e.target.value)||0}}))} style={INP}/>
+                <div style={{display:"flex",gap:6,marginBottom:8}}>
+                  <button onClick={()=>setAjustes(a=>({...a,[cl.id]:{...aj,type:"pesos",val:0}}))}
+                    style={{flex:1,padding:"8px",borderRadius:10,border:`2px solid ${aj.type==="pesos"?C.green:C.border}`,background:aj.type==="pesos"?C.green+"22":"transparent",color:aj.type==="pesos"?C.green:C.textMuted,fontWeight:700,fontSize:13,cursor:"pointer"}}>
+                    + / - $
+                  </button>
+                  <button onClick={()=>setAjustes(a=>({...a,[cl.id]:{...aj,type:"pct",val:0}}))}
+                    style={{flex:1,padding:"8px",borderRadius:10,border:`2px solid ${aj.type==="pct"?C.green:C.border}`,background:aj.type==="pct"?C.green+"22":"transparent",color:aj.type==="pct"?C.green:C.textMuted,fontWeight:700,fontSize:13,cursor:"pointer"}}>
+                    % desc.
+                  </button>
                 </div>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <input type="number" value={aj.val||""} placeholder={aj.type==="pct"?"ej: 10":"ej: 5000"} onChange={e=>setAjustes(a=>({...a,[cl.id]:{...aj,val:parseFloat(e.target.value)||0}}))} style={{...INP,flex:1}}/>
+                  <button onClick={()=>setAjustes(a=>({...a,[cl.id]:{...aj,val:aj.val?-aj.val:0}}))}
+                    style={{flexShrink:0,width:48,height:48,borderRadius:10,border:`2px solid ${aj.val<0?C.red:C.border}`,background:aj.val<0?"#2a0f0f":"transparent",color:aj.val<0?C.red:C.textMuted,fontWeight:800,fontSize:22,cursor:"pointer"}}>
+                    −
+                  </button>
+                </div>
+                {aj.val!==0&&<div style={{fontSize:12,color:C.green,marginTop:6,fontWeight:600}}>
+                  Base: {ars(base)} {dif>0?"+":" "}{ars(dif)} = <b>{ars(fin)}</b>
+                </div>}
               </div>
             )}
 
             <div style={{display:"flex",gap:8}}>
-              {fin>0&&<button onClick={()=>setConfPay({cl,amount:fin,ids,adjWalks,cid:cl.id})} style={{...BTN(C.green,"#0f1a14"),flex:2,fontWeight:800}}>💰 Cobrar {ars(fin)}</button>}
+              {fin>0&&<button onClick={()=>setConfPay({cl,amount:fin,baseAmount:base,ids,adjWalks,cid:cl.id})} style={{...BTN(C.green,"#0f1a14"),flex:2,fontWeight:800}}>💰 Cobrar {ars(fin)}</button>}
               <a href={wa(cl.phone,fin>0?`Hola ${cl.name}! Resumen:\n${cd.map(({dog,calc})=>calc.realizados>0?`🐕 ${dog.name}: ${ars(calc.cobro)}`:"").filter(Boolean).join("\n")}\nTotal: ${ars(fin)} 🐾`:`Hola ${cl.name}, todo al día esta semana 🐾`)} target="_blank" rel="noreferrer"
                 style={{...BTN(C.wa,"white"),flex:1,textDecoration:"none",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center"}}>💬</a>
             </div>
@@ -829,7 +893,7 @@ function Cobros({paseos,setPaseos,dogs,clients}){
             {confirmPay.parcial!==undefined&&confirmPay.parcial<confirmPay.amount&&<div style={{fontSize:12,color:C.amber,textAlign:"center",marginBottom:8}}>⚠ Pago parcial</div>}
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>setConfPay(null)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
-              <button onClick={()=>{ const m=confirmPay.parcial!==undefined?confirmPay.parcial:confirmPay.amount; if(m<confirmPay.amount) doPartial({...confirmPay,parcial:m}); else doCollect(confirmPay); }} style={{...BTN(C.green,"#0f1a14"),flex:2}}>
+              <button onClick={()=>{ const m=confirmPay.parcial!==undefined?confirmPay.parcial:confirmPay.amount; if(m<confirmPay.amount) doPartial({...confirmPay,parcial:m,amount:confirmPay.amount}); else doCollect({...confirmPay,amount:confirmPay.amount}); }} style={{...BTN(C.green,"#0f1a14"),flex:2}}>
                 {(()=>{ const m=confirmPay.parcial!==undefined?confirmPay.parcial:confirmPay.amount; return m<confirmPay.amount?`Abonar ${ars(m)}`:`Cobrado ✓`; })()}
               </button>
             </div>
@@ -1045,7 +1109,7 @@ function Resumen({paseos,dogs,clients,selWeek,onChangeWeek,selMes,onChangeMes,se
   const wProg=wp.filter(p=>p.status==="programado");
   const isCurW=wr.from===weekRange(TODAY).from;
 
-  const ingresoSemana=useMemo(()=>{ let t=0; dogs.forEach(dog=>{const dp=wp.filter(p=>p.dogId===dog.id);if(dp.length)t+=calcCobro(dp,dog).cobro;}); return t; },[wp,dogs]);
+  const ingresoSemana=useMemo(()=>{ return wp.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0); },[wp]);
   const ingresoPotencial=useMemo(()=>{ if(!wp.some(p=>p.status!=="programado")) return 0; let t=0; dogs.forEach(dog=>{if(!wp.some(p=>p.dogId===dog.id)||!dog.schedule.length) return; t+=dog.unitPrice>0?dog.unitPrice*dog.schedule.length:priceFor(dog.schedule.length,dog.prices);}); return t; },[dogs,wp]);
 
   const mp=paseos.filter(p=>p.fecha.startsWith(selMes));
@@ -1053,7 +1117,7 @@ function Resumen({paseos,dogs,clients,selWeek,onChangeWeek,selMes,onChangeMes,se
   const mCxlCli=mp.filter(p=>p.status==="cancelado"&&p.cancelBy==="client");
   const mCxlYo=mp.filter(p=>p.status==="cancelado"&&p.cancelBy==="me");
   const isCurM=selMes===TODAY.slice(0,7);
-  const ingresoMes=useMemo(()=>{ let t=0; dogs.forEach(dog=>{const dp=mp.filter(p=>p.dogId===dog.id);if(!dp.length) return; const bw={}; dp.forEach(p=>{const k=weekRange(p.fecha).from;if(!bw[k])bw[k]=[];bw[k].push(p);}); Object.values(bw).forEach(sp=>{t+=calcCobro(sp,dog).cobro;}); }); return t; },[mp,dogs]);
+  const ingresoMes=useMemo(()=>mp.filter(p=>p.status==="completado").reduce((s,p)=>s+(p.paidAmount||0),0),[mp]);
 
   const semanasDelMes=useMemo(()=>{ const [y,m]=selMes.split("-").map(Number),seen=new Set(),res=[]; for(let d=1;d<=31;d++){const f=`${y}-${pad2(m)}-${pad2(d)}`;if(!f.startsWith(selMes))break;const w=weekRange(f);if(!seen.has(w.from)){seen.add(w.from);res.push(w);}} return res; },[selMes]);
 
@@ -1114,7 +1178,7 @@ function Resumen({paseos,dogs,clients,selWeek,onChangeWeek,selMes,onChangeMes,se
               </div>
             ))}
           </div>
-          {isCurW&&wProg.length>0&&<div style={{background:"#1a1200",borderRadius:12,padding:12,marginBottom:12,border:"1px solid #4a3a00"}}><div style={{fontWeight:700,fontSize:13,color:C.amber,marginBottom:6}}>⏳ {wProg.length} pendiente{wProg.length!==1?"s":""}</div>{wProg.map(p=>{const dog=dogs.find(d=>d.id===p.dogId);return <div key={p.id} style={{fontSize:12,color:C.textMuted}}>· {dog?.name} — {p.fecha}</div>;})}</div>}
+
           <div style={CARD}>
             <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:10}}>Desglose por perro</div>
             {!dogs.filter(dog=>wp.some(p=>p.dogId===dog.id)).length&&<div style={{textAlign:"center",padding:16,color:C.textMuted,fontSize:13}}>Sin paseos esta semana</div>}
@@ -1361,8 +1425,25 @@ function App(){
                 {dogs.map(d=>{const cl=clients.find(c=>c.id===d.clientId);return <option key={d.id} value={d.id}>{d.name} — {cl?.name}</option>;})}
               </select>
             </div>
-            <div><label style={LBL}>Fecha</label><input type="date" value={nWalk.fecha} onChange={e=>setNWalk(w=>({...w,fecha:e.target.value}))} style={INP}/></div>
-            {nWalk.dogId&&(()=>{ const dog=getDog(parseInt(nWalk.dogId)); const price=dog?.unitPrice>0?dog.unitPrice:priceFor(dog?.schedule?.length||0,dog?.prices); return <div style={{background:C.green+"22",borderRadius:8,padding:"10px 12px",fontSize:13,color:C.green,fontWeight:600}}>💰 {ars(price)}/paseo</div>; })()}
+            <div><label style={LBL}>Fecha</label><input type="date" value={nWalk.fecha} onChange={e=>setNWalk(w=>({...w,fecha:e.target.value}))} style={INP}/>
+              {nWalk.fecha&&(()=>{const wr=weekRange(nWalk.fecha);return <div style={{fontSize:11,color:C.textMuted,marginTop:4}}>📅 Semana: {wr.from} → {wr.to}</div>;})()}
+            </div>
+            {nWalk.dogId&&(()=>{
+              const dog=getDog(parseInt(nWalk.dogId));
+              const wr=weekRange(nWalk.fecha||getToday());
+              const wpPreview=paseos.filter(p=>p.dogId===dog?.id&&p.fecha>=wr.from&&p.fecha<=wr.to);
+              const rPreview=wpPreview.filter(p=>p.status==="completado").length+1; // +1 this manual
+              const cyPreview=wpPreview.filter(p=>p.status==="cancelado"&&p.cancelBy==="me").length;
+              const packAc=Math.min(rPreview+cyPreview,5);
+              const price=dog?.unitPrice>0?dog.unitPrice:priceFor(packAc,dog?.prices);
+              const pu=unitPriceFor(dog?.schedule?.length||1,dog?.prices);
+              return (
+                <div style={{background:C.green+"22",borderRadius:8,padding:"10px 12px",fontSize:13,color:C.green,fontWeight:600}}>
+                  <div>Pack acumulado con este paseo: {packAc}d → {ars(price)}</div>
+                  {dog?.unitPrice===0&&<div style={{fontSize:11,marginTop:2,opacity:.8}}>Precio unitario pack contratado: {ars(pu)}/paseo</div>}
+                </div>
+              );
+            })()}
           </div>
           <div style={{display:"flex",gap:8,marginTop:16}}>
             <button onClick={()=>setAddWalk(null)} style={{...BTN(C.cardLight,C.textMuted),flex:1}}>Cancelar</button>
@@ -1441,4 +1522,4 @@ root.render(React.createElement(App));
     }
   </script>
 </body>
-</html>
+  </html>
